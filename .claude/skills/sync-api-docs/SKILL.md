@@ -236,7 +236,7 @@ publish or sync the docs; if they only asked to "update" them, ask first. Then
 confirm the deploy (the `gh` CLI may not be installed; the API works without it):
 
 ```bash
-curl -s https://api.github.com/repos/otahir3/docs/commits/<sha>/check-runs
+curl -s https://api.github.com/repos/gomarketbox/docs/commits/<sha>/check-runs
 ```
 
 Expect `check: completed success` (the drift checker in CI) and
