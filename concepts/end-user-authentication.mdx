@@ -1,29 +1,40 @@
 ---
 title: End-user authentication
-description: How end users sign in to your booking flow, and how the two auth planes fit together.
+description: How signed-in clients and suppliers call the API through your backend, and who may call each end-user route.
 ---
 
 Most MarketBox API calls are made by **your application** and authenticate with
-an API key. But some flows act on behalf of a **signed-in end user** — for
+an API key. But some flows act on behalf of a **signed-in person** — for
 example, "show me _my_ bookings" or "use _my_ remaining credits". Those routes
-require a second credential: a user token obtained when the end user signs in.
+require a second credential: a user token obtained when the person signs in.
 
-This page explains the model. For a step-by-step integration, see
-[Build a booking flow](/guides/booking-flow-auth).
+This page explains the model. For step-by-step integrations, see
+[Build a booking flow](/guides/booking-flow-auth) and
+[Build a supplier portal](/guides/build-a-supplier-portal).
 
-## Two auth planes
+## Two credentials
 
 Every request to an end-user route carries **two** credentials, each with a
 distinct job:
 
-| Plane | Header | Identifies | Used for |
+| Credential | Header | Identifies | Used for |
 | --- | --- | --- | --- |
 | Application | `x-api-key` | Your application and its project scope | Every API call |
-| End user | `Authorization: Bearer <jwt>` | The signed-in end user | End-user routes only |
+| End user | `Authorization: Bearer <jwt>` | The signed-in person | End-user routes only |
 
 The API key proves _which integration_ is calling. The user token proves _which
 person_ the call is for. End-user routes need both; everything else needs only
 the API key (see [Authentication](/concepts/authentication)).
+
+## Two end-user planes
+
+The end-user routes form two planes. Each acts on the signed-in person's own
+record, and never takes that record's id from the path or the body:
+
+| Plane | Routes | Acts as | Guide |
+| --- | --- | --- | --- |
+| Client | `/v1/projects/{projectId}/clients/me` and below | The client the token belongs to | [Build a booking flow](/guides/booking-flow-auth) |
+| Supplier | `/v1/projects/{projectId}/suppliers/me` and below | The supplier the token belongs to | [Build a supplier portal](/guides/build-a-supplier-portal) |
 
 ## The golden rule
 
@@ -52,11 +63,49 @@ that is the only place the API key lives.
 ## Where the user token comes from
 
 End users sign in through **MarketBox hosted login** using the OAuth 2.0
-Authorization Code flow with PKCE. Your booking flow redirects the user to the
-hosted sign-in page; after they authenticate, MarketBox redirects back to your
-callback URL with an authorization code, which you exchange for tokens. The
-access token from that exchange is the `Bearer` token you forward to end-user
-routes.
+Authorization Code flow with PKCE. Your app redirects the person to the hosted
+sign-in page; after they authenticate, MarketBox redirects back to your
+callback URL with an authorization code, which you exchange for tokens.
+
+**Forward the access token your own Application's client issued.** That is the
+token from signing in with your Application's `clientId`. Don't forward the ID
+token, or a token issued to another client — the MarketBox dashboard's or
+another Application's.
+
+<Warning>
+Today a token from another client is logged and the request still goes through.
+Once enforcement is switched on, it is a `401 UNAUTHORIZED`. Send your own
+client's access token now, and nothing changes for you when it is switched on.
+On the client plane, MarketBox's own booking flow stays accepted; on the
+supplier plane, it doesn't.
+</Warning>
 
 You configure the OAuth client and endpoints once — see
 [Build a booking flow](/guides/booking-flow-auth) for the full walkthrough.
+
+## Who may call an end-user route
+
+Both planes check the person's **membership** of the project on every request.
+The person must hold an `ACTIVE` membership whose roles grant the route's
+permission:
+
+- A **client** gets an `ACTIVE` membership with the `CLIENT` role from
+  onboarding, `POST /v1/projects/{projectId}/clients/me`. Onboarding is the one
+  end-user route that needs no membership — it creates it.
+- A **supplier** gets an `ACTIVE` membership with the `SUPPLIER` role by
+  accepting the business's invitation in the dashboard.
+
+A live client profile or supplier record doesn't help on its own. When the
+business removes the person's role in the dashboard, their next call is refused.
+
+| Status and `code` | What it means |
+| --- | --- |
+| `401` | No token, a malformed `Authorization` header, or a token that is invalid or expired. Sign in again. |
+| `403 CAPABILITY_NOT_GRANTED` | The API key lacks Standard API access. |
+| `403 FORBIDDEN` | The key can't access this project, the person has no `ACTIVE` membership (`"No active membership on this project"`), or their roles lack the permission (`"Insufficient permissions for this action"`). |
+| `403 ACTING_ROLE_NOT_HELD` | The request sent an `X-MB-Acting-Role` header naming a role the person doesn't hold. You don't need that header. |
+| `404 NOT_FOUND` | The person passed every check but has no client profile or supplier record in this project. |
+
+A client whose access was removed and who calls onboarding again gets
+`403 MEMBERSHIP_INACTIVE`, with the message "Your access to this business was
+removed. Ask them to invite you again." Nothing is read or linked.

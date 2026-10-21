@@ -77,11 +77,14 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | Status | When you'll see it                                                                                 |
 | ------ | -------------------------------------------------------------------------------------------------- |
 | `400`  | The request is malformed: invalid JSON, invalid query parameters, a violated business invariant.   |
-| `401`  | Narrow: only on the few routes that require no API key at the edge (`/health`, `/v1/openapi.json`), where the application's own middleware rejects the request. A missing or unrecognised key on any project-scoped route is `403`, not `401`. |
-| `403`  | The `x-api-key` header is missing or the key isn't recognised — rejected at the edge, before any scope check runs — or the key is valid but its `projectScope` does not allow the `{projectId}` in the URL. |
+| `401`  | The user token on an end-user route (`/clients/me`, `/suppliers/me`) is missing, malformed, invalid or expired — sign the person in again. Also the beacon's publishable key, when it is missing or not live. A missing or unrecognised **API key** is `403`, not `401`. |
+| `403`  | The `x-api-key` header is missing or the key isn't recognised — rejected at the edge, before any scope check runs — or the key is valid but its `projectScope` does not allow the `{projectId}` in the URL, or it lacks the capability the route needs. On an end-user route, also: the signed-in person isn't an `ACTIVE` member of the project holding the route's permission. |
 | `404`  | The resource you targeted doesn't exist (or has been soft-deleted).                                |
 | `409`  | Version conflict on an optimistic update, the supplier's time is already booked or held, capacity exceeded, or duplicate registration. |
+| `413`  | The request body is too large — on the site-events routes, more than 256 KB per batch or 64 KB per beacon. Nothing was read. |
 | `422`  | The request is well-formed but asks for something the data cannot support: a package plan that no availability can fill, a line the service is not sold as, or a credit treatment for a booking with no credit. Nothing was written. |
+| `429`  | Too many requests from this key. Today only the site-events routes rate-limit. Retry after the `Retry-After` header. |
+| `503`  | A dependency was down and nothing was recorded. Retry after the `Retry-After` header. |
 | `5xx`  | Something went wrong on our side. Safe to retry idempotent requests with backoff.                  |
 
 ## Common error codes
@@ -90,8 +93,14 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | --------------------------------------- | ------ | --------------------------------------------------------------------------------------- |
 | `VALIDATION_ERROR`                      | 400    | Request body or query failed schema validation. `message` names the field.              |
 | `BAD_REQUEST`                           | 400    | Generic client-input failure covering several situations: an illegal status transition (e.g. nothing leaves `CANCELLED`; the `message` names the booking's current status), a mismatched currency between an order and an item you're adding to it, an offering that isn't `ACTIVE`, an unparseable pagination `cursor`, and other malformed input. `message` names the specific problem. |
-| `UNAUTHORIZED`                          | 401    | Rare. Reachable only on the routes that need no API key at the edge (`/health`, `/v1/openapi.json`), where the application's own middleware rejects the request. Everywhere else a missing or unrecognised key is `FORBIDDEN`. |
-| `FORBIDDEN`                             | 403    | API key is missing, isn't recognised, or cannot access this project. The first two are rejected at the edge before the request reaches the application, so `message` — not `code` — is what distinguishes them. |
+| `HTTP_ERROR`                            | 400, 401 | A request refused before its route ran. `401` on an end-user route: a missing or malformed `Authorization` header, or a user token that is invalid or expired — sign in again. `400`: a body that isn't valid JSON. |
+| `UNAUTHORIZED`                          | 401    | On an end-user route, a user token that names no user — and, once enforced, a token issued to another client. See [End-user authentication](/concepts/end-user-authentication#where-the-user-token-comes-from). A missing or unrecognised **API key** is `FORBIDDEN`. |
+| `FORBIDDEN`                             | 403    | API key is missing, isn't recognised, or cannot access this project. The first two are rejected at the edge before the request reaches the application, so `message` — not `code` — is what distinguishes them. On an end-user route, also "No active membership on this project" or "Insufficient permissions for this action". On `POST .../events`, a key without `events:write`. |
+| `CAPABILITY_NOT_GRANTED`                | 403    | Your API key lacks **Standard API access** (`*`): its capabilities are empty or name only site events. Checked before the project or the user token. A project admin grants it on the Application. See [Capabilities](/concepts/authentication#capabilities). |
+| `ACTING_ROLE_NOT_HELD`                  | 403    | An end-user request sent `X-MB-Acting-Role` naming a role the signed-in person doesn't hold. Drop the header. |
+| `MEMBERSHIP_INACTIVE`                   | 403    | `POST .../clients/me` (onboarding) for a person whose access the business removed. Nothing was read or linked. The client asks the business to invite them again. See [Build a booking flow](/guides/booking-flow-auth#onboard-the-client). |
+| `FIELD_NOT_SELF_EDITABLE`               | 403    | `PATCH .../suppliers/me` named a field only the business may change (`active`, `email`, `externalId`, `externalData`, `maxTravelTime`, `defaultLocale`). The whole body was refused. See [Build a supplier portal](/guides/build-a-supplier-portal#edit-the-profile). |
+| `INSIGHTS_DISABLED`                     | 403    | The project has switched off this supplier insight (demand, or search). Hide the insight in your portal. |
 | `NOT_FOUND`                             | 404    | Resource doesn't exist or has been soft-deleted. Also returned for a `clientId` or `supplierId` in the request body that belongs to a different project — never a `403`, so a foreign id is indistinguishable from a missing one. |
 | `VERSION_CONFLICT`                      | 409    | Concurrent modification — re-read the resource and try again.                           |
 | `CONFLICT`                              | 409    | Generic write conflict covering situations like a booking that's already at capacity, or a client that's already registered as a participant on it. `message` names the specific problem. |
@@ -104,6 +113,9 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | `TRANSACTION_IDEMPOTENCY_RECORD_MISSING` | 409   | An `idempotencyKey` matched an earlier recording whose row could not be read back. **Terminal** — do not retry. Re-read the order's transactions and contact support with the `requestId`. |
 | `NO_SESSION_CREDIT`                     | 422    | `creditTreatment` was sent when cancelling a booking that holds no package credit. Nothing was cancelled. Resend without `creditTreatment`. |
 | `SERVICE_NOT_SOLD_AS`                   | 422    | An order line implies a rate the service does not actively sell, such as a `SINGLE_SESSION` line on a service with no active `SINGLE_BOOKING` rate. Nothing was written. See [Orders](/resources/orders#creating-an-order). |
+| `PAYLOAD_TOO_LARGE`                     | 413    | A site-events batch over 256 KB, or a beacon over 50 events or 64 KB. Nothing was read. Send fewer events per request. |
+| `RATE_LIMITED`                          | 429    | More than about 50 site-events requests a second from this key (bursts of 100). Retry the same batch after `Retry-After`. |
+| `SERVICE_UNAVAILABLE`                   | 503    | MarketBox couldn't check or record a site-events batch. Nothing was recorded. Retry the same batch after `Retry-After`. |
 
 The exact list of codes is also captured in
 [`/v1/openapi.json`](/api-reference/introduction). New codes may be added
@@ -142,6 +154,24 @@ and the slate-based booking routes. Full walkthrough in
   See [Hold slots during checkout](/guides/hold-slots-for-checkout#a-travel-zone-checkout-end-to-end).
 </Warning>
 
+## Supplier booking codes
+
+These come from the supplier plane's booking routes: cancel, reschedule and the
+attendance report. Full walkthrough in
+[Build a supplier portal](/guides/build-a-supplier-portal#when-a-change-is-refused).
+
+| `code`                           | Status | What it means                                                                 | What to do                                                   |
+| -------------------------------- | ------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `PARTICIPANT_ACTION_DISABLED`    | 403    | The booking's service doesn't let suppliers cancel (or reschedule).            | Hide the action. The supplier contacts the business.         |
+| `BOOKING_NOT_SCHEDULED`          | 409    | The booking is no longer `SCHEDULED`.                                          | Re-read the booking. Don't retry.                            |
+| `NOTICE_WINDOW_PASSED`           | 409    | Too close to the start to change it.                                           | Don't retry. The supplier contacts the business.             |
+| `NEW_START_INSIDE_NOTICE_WINDOW` | 422    | Reschedule only: the new time is itself inside the notice window.               | Pick a later time.                                           |
+| `SLOT_UNAVAILABLE`               | 409    | Reschedule only: the new time is outside working hours, in blocked time or overlaps another booking. | Pick another time.                    |
+| `SLOT_UNVERIFIABLE`              | 409    | Reschedule only: availability couldn't be checked, so nothing changed.          | Try again later, or contact the business.                    |
+| `REPORT_ALREADY_EXISTS`          | 409    | A different attendance answer is already on file.                               | Show the answer on file. Don't retry.                        |
+| `BOOKING_ALREADY_SETTLED`        | 409    | The booking is already settled.                                                 | Don't retry.                                                 |
+| `BOOKING_NOT_REPORTABLE`         | 422    | The booking is cancelled, or hasn't ended yet.                                  | Report after the booking ends.                               |
+
 ## Validation errors
 
 For schema validation failures, `message` names the offending field:
@@ -178,8 +208,9 @@ next.
   the same body, status changes to the same target) with exponential
   backoff. Avoid blind retries on `POST`, since the original may have
   succeeded.
-- **`429`** — not currently emitted, but reserved. If introduced,
-  respect the `Retry-After` header.
+- **`429 RATE_LIMITED`** and **`503 SERVICE_UNAVAILABLE`** — wait for the
+  `Retry-After` header, then resend the same request. On the site-events routes,
+  resend the same batch with the same `eventId`s; nothing is counted twice.
 
 ## Surfacing errors to support
 

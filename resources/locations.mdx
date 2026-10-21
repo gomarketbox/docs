@@ -1,0 +1,115 @@
+---
+title: Locations and skills
+description: Read a project's venues, virtual locations, travel-zone areas and skills with the API key alone.
+---
+
+Two small catalogues back most booking and supplier screens: the project's
+**locations** and its **skills**. Both are read with the API key alone, and
+both are set up in the MarketBox dashboard — the public API reads them but
+doesn't create or edit them.
+
+Neither list is paginated. A project holds tens of locations and a handful of
+skills, so each list comes back whole, in one response, with no `nextCursor`.
+
+## Locations
+
+```
+GET /v1/projects/{projectId}/locations
+GET /v1/projects/{projectId}/locations/{locationId}
+```
+
+A location is one of three types, in `locationType`:
+
+| `locationType` | What it is |
+| --- | --- |
+| `PHYSICAL` | A venue with an address and coordinates, where the service is delivered. |
+| `VIRTUAL` | Delivered online. Usually no address. |
+| `TRAVEL_ZONE` | A project-wide area that suppliers travel within: a circle (`CIRCULAR`) or a drawn polygon (`DRAWN`). |
+
+### Listing locations
+
+The list returns **active** locations only. Deleted locations never appear.
+
+| Query parameter | What it does |
+| --- | --- |
+| `locationType` | Only locations of this type. With it, the list is sorted by name; without it, by id. |
+| `includeInactive` | `true` also returns inactive locations (`active: false`). |
+| `namePrefix` | Only locations whose name starts with this text, ignoring case. **Requires `locationType`.** |
+
+```bash
+curl "$MARKETBOX_API_URL/v1/projects/prj_01h2xcejqtfzcjxkvc4ay3pnh3/locations?locationType=PHYSICAL&namePrefix=down" \
+  -H "x-api-key: $MARKETBOX_API_KEY"
+```
+
+`namePrefix` without `locationType` is a `400 VALIDATION_ERROR`, and the
+`message` says `namePrefix requires locationType`.
+
+Display `nameI18n` in the reader's language when it is present, and fall back
+to `name`. `timezone` is the zone a booking at this location is shown in. When
+it's `null`, the supplier's zone and then the project's apply. See
+[Timezones](/concepts/timezones).
+
+A `TRAVEL_ZONE` row carries its geometry: `travelZoneType`, then
+`travelDistance` and `travelDistanceUnit` for a circle, or `travelRegions`
+(GeoJSON) for a drawn area. Those fields are `null` on the other types.
+
+### Reading one location
+
+`GET /locations/{locationId}` returns one location, **active or inactive**. Use
+it to show where a booking takes place: a booking at a venue that has since
+closed still resolves.
+
+A deleted location, an unknown id and another project's location all return the
+same `404 NOT_FOUND`.
+
+<Note>
+  A supplier's own travel zones (`stz_…`) are not project locations, and are not
+  returned here. A supplier manages them on the
+  [supplier plane](/guides/build-a-supplier-portal#travel-zones).
+</Note>
+
+### The supplier's venue list
+
+A supplier portal has a narrower list of its own:
+`GET /v1/projects/{projectId}/suppliers/me/locations`. It returns the project's
+active `PHYSICAL` and `VIRTUAL` locations, sorted by name — the venues a
+supplier can name in a schedule — without travel settings, status or audit
+fields. It takes the supplier's user token as well as the API key. See
+[Build a supplier portal](/guides/build-a-supplier-portal#venues).
+
+## Skills
+
+```
+GET /v1/projects/{projectId}/skills
+```
+
+A **skill** is a qualification a supplier can list on their profile, such as a
+certification or a language. Use the list to:
+
+- build the skill picker of a supplier profile form — the ids you send as
+  `skillIds` to `PATCH /suppliers/me` come from here;
+- filter availability by skill — the `skills` field on
+  `POST /availability/search` takes these ids.
+
+The list returns active skills, sorted by `ordinal`. Add `includeInactive=true`
+for the inactive ones too; they come first. Soft-deleted skills never appear.
+Display `nameI18n` in the reader's language, falling back to `name`.
+
+To add a skill to a supplier with the API key, use
+`POST /v1/projects/{projectId}/suppliers/{supplierId}/skills/{skillId}`. See
+[Suppliers](/resources/suppliers#managing-suppliers).
+
+## Errors
+
+| Status | When |
+| --- | --- |
+| `400` | `namePrefix` without `locationType`, or another invalid query parameter. |
+| `403` | The API key can't access this project, or lacks Standard API access (`CAPABILITY_NOT_GRANTED`). |
+| `404` | No such project, or (one location) no such location in it. |
+
+## Endpoint index
+
+- `GET /v1/projects/{projectId}/locations`
+- `GET /v1/projects/{projectId}/locations/{locationId}`
+- `GET /v1/projects/{projectId}/skills`
+- `GET /v1/projects/{projectId}/suppliers/me/locations`

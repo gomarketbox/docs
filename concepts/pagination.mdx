@@ -1,11 +1,18 @@
 ---
 title: Pagination
-description: Cursor-based pagination used on every list endpoint.
+description: Cursor-based pagination used on the API's large lists.
 ---
 
-Every list endpoint in the MarketBox API uses **cursor-based pagination**.
+The MarketBox API's large lists use **cursor-based pagination**.
 There are no page numbers — you ask for a page of results, and the
 response tells you whether more exist.
+
+A few small or windowed lists return everything in one response, with no
+`cursor` and no `nextCursor`: locations and skills
+([Locations and skills](/resources/locations)), and the supplier plane's
+lists — bookings in a window, schedules, blocked times, travel zones and
+venues ([Build a supplier portal](/guides/build-a-supplier-portal)). Each
+endpoint's reference says which kind it is.
 
 ## Query parameters
 

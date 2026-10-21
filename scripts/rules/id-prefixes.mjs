@@ -39,6 +39,8 @@
  * truncation, case, all at once). See task-6-report.md, fix round 2.
  */
 
+import { collectEnumValues } from './error-codes.mjs';
+
 /** A prefixed id: lowercase prefix, underscore, then one of two body shapes:
  *  - the original full body, `[a-z0-9]{3,32}` (min 3 chars so ordinary
  *    snake_case words like `content_type` are not matched), or
@@ -125,8 +127,12 @@ function isPlaceholder(value) {
 
 export default {
   name: 'id-prefixes',
-  check(page, { contract }) {
+  check(page, { contract, spec }) {
     const known = new Set(contract.idPrefixes);
+    // A snake_case value the spec declares in some `enum` (`profile_view`,
+    // `site_search`, `no_area`, …) is a field value, not an id.
+    const enumValues = new Set();
+    collectEnumValues(spec, enumValues);
     const findings = [];
 
     for (const { n, text } of page.lines) {
@@ -137,6 +143,7 @@ export default {
 
       for (const [match, prefix] of text.matchAll(ID_RE)) {
         if (NOT_IDS.has(match)) continue;
+        if (enumValues.has(match)) continue;
         if (THIRD_PARTY_PREFIXES.has(prefix)) continue;
         if (known.has(prefix)) continue;
 

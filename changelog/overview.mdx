@@ -3,6 +3,48 @@ title: "Changelog"
 description: "New features, updates, and fixes to the MarketBox API."
 ---
 
+<Update label="October 21, 2026" tags={["API"]}>
+
+## The supplier plane, site events, and API-key capabilities
+
+Suppliers can now manage their own work from your branded portal. The new **supplier plane**, `/v1/projects/{projectId}/suppliers/me`, carries their profile and photo, bookings and attendance reports, cancel and reschedule, working hours, blocked time, travel zones, venues, and demand and search insights. Your site can also report which suppliers it showed, so suppliers' search insights count them. API keys now carry **capabilities**, and a key without standard access is refused.
+
+**One breaking change, two behaviour changes, the rest additive.** No field was removed or renamed. The breaking change cuts off no live key today. Strict response decoders need a regeneration for `searchId`, `position`, `engineEnabled`, `attribution` and `participantSettings`.
+
+**Breaking**
+
+- **A key without Standard API access is refused.** Every route except `POST …/events` now needs the `*` capability. A key with no capabilities ticked, or only **Site events**, gets `403 CAPABILITY_NOT_GRANTED` before anything else is read. Keys minted before capabilities existed are treated as `*` and keep working.
+
+**Changed**
+
+- **End-user routes require an `ACTIVE` membership.** Every `/clients/me` route except onboarding, and every `/suppliers/me` route, checks the person's membership of the project on each request. No membership is `403 FORBIDDEN`, "No active membership on this project". When the business removes a person's role, their next call is refused.
+- **Onboarding refuses a removed client.** `POST …/clients/me` answers `403 MEMBERSHIP_INACTIVE` for a person whose access the business removed, and reads or links nothing.
+- **Coming: end-user tokens must come from your Application's own client.** A token issued to another client — the MarketBox dashboard's or another Application's — is logged today and still accepted. Once enforcement is switched on, it is `401 UNAUTHORIZED`.
+
+**New**
+
+- **The supplier plane** — 33 operations under `/v1/projects/{projectId}/suppliers/me`, each the twin of a dashboard screen. They take the API key and the supplier's access token. Cancel and reschedule follow the service's participant settings, with new codes `PARTICIPANT_ACTION_DISABLED`, `BOOKING_NOT_SCHEDULED`, `NOTICE_WINDOW_PASSED`, `NEW_START_INSIDE_NOTICE_WINDOW`, `SLOT_UNAVAILABLE` and `SLOT_UNVERIFIABLE`. Attendance reports add `BOOKING_ALREADY_SETTLED` and `BOOKING_NOT_REPORTABLE`. The profile adds `FIELD_NOT_SELF_EDITABLE`; insights add `INSIGHTS_DISABLED`.
+- **`GET …/locations` and `GET …/locations/{locationId}`** — the project's venues, virtual locations and travel-zone areas, with the API key alone. Not paginated. The single read returns inactive locations too.
+- **`GET …/skills`** — the project's skills, for a supplier profile's skill picker and the `skills` availability filter.
+- **Site events.** `POST …/events` (from your server, needs the `events:write` capability) and `POST …/events/beacon` (from the browser, with a publishable key and an origin allowlist). New codes `PAYLOAD_TOO_LARGE` (413), `RATE_LIMITED` (429) and `SERVICE_UNAVAILABLE` (503).
+- **`searchId` and `position` on every search.** `POST …/availability/search`, `/suppliers`, `/package-slate`, `/package-options`, `/time-slots` and `GET …/suppliers` return a `searchId` (also the `X-MB-Search-Id` header), and rank each supplier or slate with a 0-based `position`. `POST …/availability/search` also returns `suppliers`. Two optional request headers, `X-MB-Session-Key` and `X-MB-Client-Kind`, tag a search for insights.
+- **`engineEnabled` on `POST …/availability/search`.** `false` means the project's scheduling engine is off, so `timeSlots` is empty because it wasn't computed.
+- **`attribution` on `POST …/orders`** — the `searchId`, `sessionKey` and `surface` the purchase came from. Copied onto every booking the order funds.
+- **`participantSettings` on services** — what suppliers and clients may do with, and see on, bookings of the service. Replaced whole on `PUT`.
+- **`X-MB-Acting-Role` is checked.** An end-user request naming a role the person doesn't hold is `403 ACTING_ROLE_NOT_HELD`.
+
+**What this means for you**
+
+- **Check every Application has Standard API access.** Open **API Access** in the dashboard. A key with nothing ticked, or only **Site events**, now gets `403 CAPABILITY_NOT_GRANTED`.
+- **Forward the access token from your own Application's client** on every `/clients/me` and `/suppliers/me` call. Don't forward the ID token, or a dashboard token.
+- **Handle `403` on end-user routes as "access removed".** Show the person how to contact the business, not a retry.
+- **Report what you draw.** Send `search.rendered` with each search's `searchId`. A search you don't report counts for nothing in suppliers' insights.
+- **Check `engineEnabled`** before telling a client nobody is free.
+
+Full detail: [Build a supplier portal](/guides/build-a-supplier-portal), [Report site events](/guides/report-site-events), [Locations and skills](/resources/locations), [Authentication → Capabilities](/concepts/authentication#capabilities), [End-user authentication → Who may call an end-user route](/concepts/end-user-authentication#who-may-call-an-end-user-route), [Availability → Search](/resources/availability#search-who-is-available), [Orders → Attribution](/resources/orders#attribution), [The booking engine model → Participant settings](/concepts/booking-engine-model#participant-settings), [Errors](/concepts/errors).
+
+</Update>
+
 <Update label="September 24, 2026" tags={["API"]}>
 
 ## Package purchases are taxed, and order tax is computed, not set

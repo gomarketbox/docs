@@ -448,3 +448,73 @@ test('loadRuleModules returns every rule when all imports succeed', async () => 
   assert.equal(rules.length, names.length);
   assert.deepEqual(rules.map((r) => r.name), names);
 });
+
+// The SiteEvent shape: a batch item is `allOf: [$ref]` to a `oneOf` whose
+// `discriminator` picks the branch by `type`. The rule must check the branch
+// the example names, and skip a node whose branch it can't pick.
+const UNION_SPEC = {
+  paths: {
+    '/v1/projects/{projectId}/events': {
+      post: {
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  events: {
+                    type: 'array',
+                    items: { type: 'object', allOf: [{ $ref: '#/components/schemas/Event' }] },
+                  },
+                },
+                required: ['events'],
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  components: {
+    schemas: {
+      Event: {
+        oneOf: [{ $ref: '#/components/schemas/Click' }],
+        discriminator: { propertyName: 'type', mapping: { click: '#/components/schemas/Click' } },
+      },
+      Click: {
+        type: 'object',
+        properties: { type: { type: 'string', enum: ['click'] }, supplierId: { type: 'string' } },
+        required: ['type', 'supplierId'],
+        additionalProperties: false,
+      },
+    },
+  },
+};
+
+test('examples rule checks the discriminated branch of a oneOf, and skips one it cannot pick', async () => {
+  const findings = await runRules(
+    join(import.meta.dirname, '__fixtures__', 'examples-union'),
+    CONTRACT,
+    UNION_SPEC,
+    [examples],
+  );
+
+  // Only events[1]'s unknown `colour`: events[0] is valid, and events[2]
+  // (unmapped `type`) and events[3] (no `type`) are skipped, not guessed.
+  assert.equal(findings.length, 1, JSON.stringify(findings, null, 2));
+  assert.match(findings[0].message, /`colour` is not a property of/);
+  assert.match(findings[0].message, /body\.events\[1\]/);
+});
+
+test('id-prefixes rule skips snake_case values the spec declares in an enum', async () => {
+  const spec = { paths: {}, components: { schemas: { E: { type: 'string', enum: ['site_search'] } } } };
+  const findings = await runRules(
+    join(import.meta.dirname, '__fixtures__', 'id-prefixes-enum'),
+    CONTRACT,
+    spec,
+    [idPrefixes],
+  );
+
+  assert.deepEqual(findings.map((f) => f.line), [7]);
+  assert.match(findings[0].message, /`prv_`/);
+});

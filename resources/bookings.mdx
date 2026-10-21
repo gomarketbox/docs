@@ -151,6 +151,11 @@ GET /v1/projects/{projectId}/bookings/{bookingId}/aggregate
 This is the right call for "show me everything about this booking" —
 one round trip instead of four.
 
+A booking funded by an order that carried
+[`attribution`](/resources/orders#attribution) carries a copy of it:
+the `searchId`, `sessionKey` and `surface` of the purchase. It is read-only on
+the booking.
+
 ## Creating a booking
 
 `POST /v1/projects/{projectId}/bookings` creates a booking and its
@@ -222,6 +227,14 @@ server-derived.
 
 If you change any time field, the server recomputes all four local
 fields against the (possibly new) `bookingTz`.
+
+A supplier can also cancel or move their own booking from your portal, when
+the service's [participant settings](/concepts/booking-engine-model#participant-settings)
+allow it. Those changes come through the supplier plane, record the supplier as
+the initiator, and email the client and the business. See
+[Build a supplier portal](/guides/build-a-supplier-portal#cancel-and-reschedule).
+Your API-key calls act for the business, and participant settings don't
+restrict them.
 
 A booking whose length deliberately differs from its service's duration carries
 `durationOverrideMinutes` and `durationOverrideReason`. Staff set them in the

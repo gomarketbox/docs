@@ -602,6 +602,27 @@ function walk(node, schema, label, ctx) {
   if (!schema || !node) return;
   schema = resolveSchema(schema, ctx.spec);
 
+  // A lone `allOf: [$ref]` wrapper (how zod emits a described reference) is
+  // the referenced schema. A multi-member allOf would need merging, so it
+  // falls through unchanged.
+  if (schema.allOf?.length === 1 && !schema.properties) {
+    walk(node, schema.allOf[0], label, ctx);
+    return;
+  }
+
+  // A union (`oneOf`/`anyOf`, e.g. the SiteEvent types in a POST /events
+  // batch): check the branch the example's discriminator value names. With no
+  // discriminator, or a value the mapping doesn't know, the branch can't be
+  // picked with confidence, so the node is skipped rather than guessed.
+  const union = schema.oneOf ?? schema.anyOf;
+  if (union) {
+    const prop = schema.discriminator?.propertyName;
+    const tag = prop && node.type === 'object' ? node.props.get(prop)?.node : undefined;
+    const ref = tag?.type === 'string' ? schema.discriminator.mapping?.[tag.value] : undefined;
+    if (ref) walk(node, { $ref: ref }, label, ctx);
+    return;
+  }
+
   if (schema.enum) {
     if (node.type === 'string' && !schema.enum.includes(node.value)) {
       ctx.findings.push({

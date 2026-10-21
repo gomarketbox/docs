@@ -1,0 +1,271 @@
+---
+title: Report site events
+description: Tell MarketBox which suppliers your site showed, which cards were seen and opened, and which search a booking came from, so suppliers' insights count them.
+---
+
+MarketBox runs the search; your site draws the results. Only your site knows
+which suppliers it actually put on the page, which cards reached the screen, and
+which ones a client opened. This guide shows how to report that, and how to tie
+a purchase back to the search it came from.
+
+What you report feeds each supplier's **Search insights** and **Week & demand**
+views, on the dashboard and on the
+[supplier plane](/guides/build-a-supplier-portal#demand-and-search-insights).
+
+<Warning>
+**A search you don't report counts for nothing.** A search with no
+`search.rendered` event isn't counted as Shown, as Seen, or on the demand map.
+</Warning>
+
+## Search ids
+
+Every search route returns a `searchId`, in the body and in the
+`X-MB-Search-Id` header:
+
+- `POST /v1/projects/{projectId}/availability/search`
+- `POST /v1/projects/{projectId}/availability/suppliers`
+- `POST /v1/projects/{projectId}/availability/package-slate`
+- `POST /v1/projects/{projectId}/availability/package-options`
+- `POST /v1/projects/{projectId}/availability/time-slots`
+- `GET /v1/projects/{projectId}/suppliers`
+
+Every page of a paginated search carries the same `searchId`; the cursor keeps
+it. Each supplier in the results also carries a 0-based `position`, continuous
+across pages: the first supplier on page 2 is numbered after the last one on
+page 1. On `POST /availability/search`, the `suppliers` array lists each
+supplier that appears in the slots, with its `position`.
+
+Keep the `searchId` for the client's session. You send it back twice: in the
+`search.rendered` event, and in `attribution` when the client buys.
+
+`POST /availability/time-slots` returns a `searchId` too, but nothing from it is
+logged for insights: the suppliers and configuration are yours, not the
+project's.
+
+### Two optional headers
+
+You can tag any search request with two headers. MarketBox stores them for
+insights and never acts on them:
+
+| Header | Value |
+| --- | --- |
+| `X-MB-Session-Key` | An opaque key you choose for the browsing session, at most 64 characters. |
+| `X-MB-Client-Kind` | `browser`, `server`, `monitor` or `loadtest`. |
+
+Tag health checks and load tests with `monitor` or `loadtest`, so they don't
+count as client demand.
+
+## The events
+
+| `type` | Send it when |
+| --- | --- |
+| `search.rendered` | You drew the results of a MarketBox search. Carry its `searchId` and the suppliers you drew, in order, with their `position`. A later page drawn is another event with the same `searchId`. |
+| `opportunity` | You drew any list that includes suppliers — a home page, a city page, a widget. One per list render. An `opportunity` carrying a `searchId` counts as the render too. |
+| `impression` | A supplier's card was at least 50% in the viewport for the first time in that list. Carries the opportunity's `eventId` as `listId`. |
+| `click` | The client opened a profile or card from a list. Carries `impressionId`, or `listId` and `supplierId` when you don't track impressions. |
+| `profile_view` | A supplier's profile page loaded, from anywhere. |
+| `coverage_miss` | A client entered an address and your site found nobody, without calling a MarketBox search. |
+
+Every event carries:
+
+- `eventId` — your id for the event, a UUID. It's the idempotency key: a retry
+  that re-sends the same id is counted once.
+- `occurredAt` — an ISO 8601 instant with an offset or `Z`. It must be within
+  24 hours ahead of receipt and 72 hours back.
+- `sessionKey` — optional. The same opaque key as `X-MB-Session-Key`, which you
+  can send as a header instead.
+
+## Send events from your server
+
+```
+POST /v1/projects/{projectId}/events
+```
+
+This is the main path. It takes your API key, which needs the
+**`events:write`** capability. A project admin ticks **Site events** on the
+Application in the dashboard. Standard API access (`*`) does **not** include it:
+a key without `events:write` gets a `403 FORBIDDEN`. See
+[Capabilities](/concepts/authentication#capabilities).
+
+Batch your events: send every 10 seconds or at 500 events, whichever comes
+first.
+
+```json
+// POST /v1/projects/{projectId}/events
+{
+  "events": [
+    {
+      "type": "search.rendered",
+      "eventId": "0192f3a4-7b1c-7e2d-9f40-5a6b7c8d9e01",
+      "occurredAt": "2026-10-21T14:05:10.020Z",
+      "sessionKey": "sess-4f9a2c",
+      "searchId": "<searchId from the search response>",
+      "surface": "results",
+      "path": "/en-ca/book/results",
+      "suppliers": [
+        { "supplierId": "sup_01kv60qgnef2kt3pvqgwmkbzfr", "position": 0 },
+        { "supplierId": "sup_01kv60qh3m7wznp8s0d2rk9abc", "position": 1 }
+      ]
+    },
+    {
+      "type": "click",
+      "eventId": "0192f3a4-8c2d-7f3e-a051-6b7c8d9e0f12",
+      "occurredAt": "2026-10-21T14:05:31.500Z",
+      "sessionKey": "sess-4f9a2c",
+      "supplierId": "sup_01kv60qh3m7wznp8s0d2rk9abc",
+      "listId": "0192f3a4-7b1c-7e2d-9f40-5a6b7c8d9e01"
+    }
+  ]
+}
+```
+
+### Each event is validated on its own
+
+The answer is always `202`, with what was accepted and what was not. A rejected
+event never fails the batch:
+
+```json
+{
+  "accepted": 1,
+  "duplicates": 0,
+  "rejected": [
+    {
+      "index": 1,
+      "eventId": "0192f3a4-8c2d-7f3e-a051-6b7c8d9e0f12",
+      "code": "UNKNOWN_SUPPLIER",
+      "message": "supplier sup_01kv60qh3m7wznp8s0d2rk9abc is not in this project"
+    }
+  ]
+}
+```
+
+Fix and resend only the rejected events. A rejection `code` is one of:
+
+| Rejection `code` | What it means |
+| --- | --- |
+| `INVALID_EVENT` | The event doesn't match its type's shape. `message` says where. |
+| `UNKNOWN_SUPPLIER` | A `supplierId` isn't in this project. |
+| `OCCURRED_AT_TOO_OLD` | `occurredAt` is more than 72 hours old. |
+| `OCCURRED_AT_IN_FUTURE` | `occurredAt` is more than 24 hours ahead. |
+
+### When the whole request fails
+
+The request fails as a whole only on auth, size, shape, rate or an outage:
+
+| Status and `code` | What it means | What to do |
+| --- | --- | --- |
+| `400 VALIDATION_ERROR` | No `events` array, or more than 500 events. | Fix the batch. |
+| `403 FORBIDDEN` | The key lacks `events:write`, or can't access this project. | Grant **Site events** on the Application. |
+| `413 PAYLOAD_TOO_LARGE` | The body is over 256 KB. Nothing was read. | Send fewer events per request. |
+| `429 RATE_LIMITED` | More than about 50 requests a second from this key (bursts of 100). | Retry the same batch after `Retry-After`. |
+| `503 SERVICE_UNAVAILABLE` | MarketBox couldn't check or record the batch. Nothing was recorded. | Retry the same batch after `Retry-After`. |
+
+```json
+{
+  "code": "RATE_LIMITED",
+  "message": "Too many event batches from this API key: about 50 requests a second are allowed (bursts of 100). Retry after a second; the batch was not read.",
+  "statusCode": 429,
+  "requestId": "6a2f8d3c-1e9b-4c75-b0a4-9d3e7f2c1b68"
+}
+```
+
+On a `429` or `5xx`, retry the **same** batch with the **same** `eventId`s, and
+nothing is counted twice. Give up on an event after 72 hours.
+
+<Note>
+**Back-filling history.** A key that also holds `events:import` may send events
+up to 400 days old. They are stored as imported.
+</Note>
+
+## Send events from the browser
+
+```
+POST /v1/projects/{projectId}/events/beacon?key=pk_…
+```
+
+The beacon takes the same events, for sites without a server of their own. It
+is built for `navigator.sendBeacon` and `fetch(…, { keepalive: true })` on a
+page that may be closing, so it needs no headers:
+
+- **The credential is the publishable key**, in `?key=`. It is shown on the
+  **API Access** page beside the API key. It's public by design — it ships in
+  your page — and can only send events.
+- **Origins are allow-listed.** The browser's `Origin` must exactly match one
+  of the origins listed on the Application: scheme and host, exactly as your
+  booking site serves them. Wildcards aren't accepted.
+- **The body** may be `text/plain` or `application/json`, so there's no CORS
+  preflight.
+- **The answer is `204`** with no body.
+
+```js
+navigator.sendBeacon(
+  `${apiUrl}/v1/projects/${projectId}/events/beacon?key=${publishableKey}`,
+  JSON.stringify({ events }),
+);
+```
+
+<Warning>
+Never put your API key in the page. The beacon refuses it with `401`, and
+anyone who reads your page could use it.
+</Warning>
+
+The beacon's limits are tighter: at most 50 events and 64 KB per beacon
+(`413` past either), and about 50 beacons a second per key. Events are
+validated exactly as on `POST /events`, but **a rejected event is dropped
+silently** — the `204` says nothing. Send from your server when you want the
+rejections back.
+
+| Status | What it means |
+| --- | --- |
+| `401` | No publishable key in `?key=`, a key that isn't live, or an API key. |
+| `403` | The `Origin` is missing or not on the Application's list, or the key belongs to another project. |
+| `413` | Over 50 events or 64 KB. Nothing was read. |
+| `429` | Too many beacons from this key. Retry after a second. |
+| `503` | MarketBox couldn't check the key or the suppliers. Nothing was recorded. |
+
+## Tie a purchase to its search
+
+When the client buys, send `attribution` on
+[`POST /v1/projects/{projectId}/orders`](/resources/orders#attribution):
+
+```json
+// POST /v1/projects/{projectId}/orders
+{
+  "clientId": "cli_01kv60qfz9b8c7d6e5f4g3h2jk",
+  "currency": "CAD",
+  "attribution": {
+    "searchId": "<searchId from the search response>",
+    "sessionKey": "sess-4f9a2c",
+    "surface": "results"
+  }
+}
+```
+
+| Field | What it is |
+| --- | --- |
+| `searchId` | The `searchId` of the search response the client booked from. |
+| `sessionKey` | The same opaque key you send with site events. |
+| `surface` | Where on your site the purchase started: `home`, `results`, `listing`, `site_search`, `profile`, `widget`, `assistant` or `other`. |
+
+`attribution` is optional and stored as given. It is copied onto every booking
+the order funds, where you can read it back. A `searchId` MarketBox never issued
+is kept but not counted. Holds and the booking routes don't take one of their
+own.
+
+## Privacy
+
+- `sessionKey` is opaque, and you hash it yourself. Never send an email, an IP
+  address or a user id.
+- Send a place as a resolution-8 H3 cell (`h3`) or as `lat` and `lng`.
+  Coordinates are reduced to the cell on receipt and never stored.
+- `path` loses its query string on receipt.
+- Supplier ids must belong to this project. `searchId`, `listId` and
+  `impressionId` are stored as you sent them.
+
+## Reference
+
+| Endpoint | Credential |
+| --- | --- |
+| `POST /v1/projects/{projectId}/events` | API key with `events:write` |
+| `POST /v1/projects/{projectId}/events/beacon` | Publishable key in `?key=`, from an allow-listed origin |
+| `POST /v1/projects/{projectId}/orders` | API key (`attribution` in the body) |

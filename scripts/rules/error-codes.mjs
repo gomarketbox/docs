@@ -78,6 +78,12 @@ const NOT_CODES = new Set([
   // and `ANY` (which pass already: no underscore, so CODE_RE never candidates
   // them).
   'SAME_SUPPLIER',
+  // A real error code that docs-contract.json does not list yet: open-api-mb
+  // throws it from POST /clients/me (clients.routes.ts) for a membership the
+  // business deactivated, but mb-core's error-codes.ts registry omits it, so
+  // contract:sync never carries it. Remove this entry once the contract lists
+  // it — the contract is the right home for it, not this list.
+  'MEMBERSHIP_INACTIVE',
 ]);
 
 /** Recursively collects every string member of every `enum` array anywhere
@@ -86,7 +92,7 @@ const NOT_CODES = new Set([
  *  spec declares for *any* field (order status, business-model type,
  *  booking-note scope, …) is accepted without this rule needing to know
  *  what that field is. */
-function collectEnumValues(node, out) {
+export function collectEnumValues(node, out) {
   if (Array.isArray(node)) {
     for (const item of node) collectEnumValues(item, out);
     return;

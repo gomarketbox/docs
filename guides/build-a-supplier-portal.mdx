@@ -1,0 +1,533 @@
+---
+title: Build a supplier portal
+description: Let suppliers manage their profile, bookings, hours, travel zones and insights from your own branded portal, through the supplier plane.
+---
+
+The **supplier plane** lets a supplier who signs in to your portal do what they
+do in the MarketBox dashboard:
+
+- keep their profile and photo up to date;
+- see their bookings and file attendance reports;
+- cancel or move a booking, when the service allows it;
+- set their working hours, blocked time, travel zones and venues;
+- read their demand and search insights.
+
+Every route lives under one base path, and none of them names a supplier:
+
+```
+/v1/projects/{projectId}/suppliers/me
+```
+
+`me` is the supplier the user token belongs to. The API never reads a supplier
+id from the path or the body. A booking, schedule, blocked time or travel zone
+id that isn't theirs is a `404` — the same answer as an id that doesn't exist.
+
+<Note>
+**The dashboard and your portal run the same code.** Every supplier-plane route
+is the twin of a dashboard route, with the same rules. A supplier gets the same
+answer, and the same refusal, from both.
+</Note>
+
+A supplier portal signs in exactly as a booking flow does. This guide covers
+what is specific to suppliers. For creating an Application, hosted sign-in
+(PKCE) and the backend-for-frontend (BFF) pattern, see
+[Build a booking flow](/guides/booking-flow-auth).
+
+## Before you start
+
+- **An Application.** A project admin creates one on the **API Access** page of
+  the dashboard. It gives you an API key for your server and a `clientId` for
+  your sign-in page. The key needs **Standard API access**. See
+  [Capabilities](/concepts/authentication#capabilities).
+- **The supplier is a member of the project.** The business invites the
+  supplier from the dashboard, and the supplier accepts. That gives them an
+  `ACTIVE` membership with the `SUPPLIER` role, linked to their supplier record.
+  Your portal can't add a supplier to a project.
+- **One sign-in.** A supplier has one MarketBox sign-in. They sign in to your
+  portal with the account they accepted the invitation with.
+
+## Credentials and the token
+
+Every supplier-plane request carries two credentials:
+
+| Header | What it is |
+| --- | --- |
+| `x-api-key` | Your Application's API key. Your BFF adds it; the browser never holds it. |
+| `Authorization: Bearer <accessToken>` | The signed-in supplier's **access token** from your own sign-in. |
+
+**Send the access token your Application's own client issued.** That is the
+token from signing in with your Application's `clientId`. Don't send the ID
+token. Don't forward a token issued to another client — the MarketBox
+dashboard's, another Application's, or MarketBox's own booking flow.
+
+<Warning>
+Today a token from another client is logged and the request still goes through.
+Once enforcement is switched on, the same request is a `401 UNAUTHORIZED`. Send
+your own client's access token now, and nothing changes for you when it is
+switched on.
+</Warning>
+
+A request with the API key but no token is a `401`. **Treat every `401` as
+"sign in again"**, whatever its `code`.
+
+## Who may call it
+
+Before a route runs, the API checks, in this order:
+
+1. Your API key, its capabilities and its project scope.
+2. The user token.
+3. The person's **membership** of the project.
+4. Their supplier record in this project.
+
+The membership is read on every request. A change the business makes in the
+dashboard applies to the supplier's next call.
+
+The person must hold an `ACTIVE` membership whose roles grant the route's
+permission. A supplier holds all three permissions:
+
+| Area | Permission |
+| --- | --- |
+| Profile and photo, hours, blocked time, travel zones, venues | `supplier:manageOwn` |
+| Bookings, attendance reports, cancel and reschedule | `booking:readOwn` |
+| Demand and search insights | `insights:readOwn` |
+
+Everyone acts as a supplier here. A project admin or manager who also has a
+supplier record acts on **their own** record only, never on someone else's. A
+manager is refused on demand and search insights.
+
+### When access ends
+
+The business ends a supplier's access by removing their `SUPPLIER` role in the
+dashboard. Their next call is refused with `403` or `404`, depending on the
+route and any role they keep.
+
+Marking a supplier inactive does **not** end access. An inactive supplier isn't
+offered in search, but keeps everything they had, on your portal as on the
+dashboard.
+
+### Refusals
+
+Every refusal uses the standard [error envelope](/concepts/errors).
+
+| Status and `code` | What it means |
+| --- | --- |
+| `401 HTTP_ERROR` | No token, a malformed `Authorization` header, or a token that is invalid or expired. |
+| `401 UNAUTHORIZED` | A token that names no user — and, once enforced, a token from another client. |
+| `403 CAPABILITY_NOT_GRANTED` | Your API key lacks Standard API access. Checked before the token. |
+| `403 FORBIDDEN` | The key can't use this project, or the person isn't an `ACTIVE` member holding the route's permission. |
+| `403 ACTING_ROLE_NOT_HELD` | Your request sent `X-MB-Acting-Role` naming a role the person doesn't hold. A portal doesn't need that header. |
+| `404 NOT_FOUND` | No such project — or the person passed every check but isn't a supplier in this project. |
+
+A person who isn't an active member sees this:
+
+```json
+{
+  "code": "FORBIDDEN",
+  "message": "No active membership on this project",
+  "statusCode": 403,
+  "requestId": "4b1d7e2a-9c3f-4a58-b6e0-2f8d1c5a7e93"
+}
+```
+
+A member whose roles lack the permission sees the same `code` with
+`"message": "Insufficient permissions for this action"`.
+
+## Times
+
+- **A booking's time is an instant plus a zone.** `bookingStartUtc` and
+  `bookingEndUtc` are UTC instants. `bookingTz` is the booking's home zone, and
+  `bookingLocalDate`, `bookingLocalStartTime` and `bookingLocalEndTime` are the
+  same times in that zone. Show the booking in its home zone, labelled.
+- **A reschedule carries one UTC instant,** the new `startTime`. The booking
+  keeps its length, and its local times are worked out again in its own zone.
+- **Hours and blocked time are wall-clock rules:** `HH:MM` times and
+  `YYYY-MM-DD` dates in the row's `timezone`, with a weekly `rrule`. Omit
+  `timezone` to use the supplier's profile zone.
+- **Insights** are given in the supplier's home zone.
+- **Query windows** on bookings (`startDate`, `endDate`) are UTC instants.
+
+See [Timezones](/concepts/timezones).
+
+## Profile and photo
+
+Paths are relative to `/v1/projects/{projectId}/suppliers/me`.
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | (the base path) | The supplier's own profile. |
+| `PATCH` | (the base path) | Changes the fields a supplier may change. |
+| `POST` | `/avatar/upload-url` | Step 1 of a new photo: a short-lived upload URL. |
+| `PUT` | `/avatar` | Step 2: attaches the uploaded photo. |
+| `DELETE` | `/avatar` | Removes the photo. `204`, whether or not there was one. |
+
+The profile includes the fields the public
+`GET /v1/projects/{projectId}/suppliers/{supplierId}` leaves out: phone, email,
+address, `active`, timezone, service and skill ids, languages and locales.
+
+### Edit the profile
+
+1. `GET /suppliers/me` to fill the form. For the pickers, call
+   `GET /v1/projects/{projectId}/services` and
+   [`GET /v1/projects/{projectId}/skills`](/resources/locations#skills) with the
+   API key alone.
+2. `PATCH /suppliers/me` with only the fields that changed. `200` returns the
+   updated profile.
+
+A supplier may change `firstName`, `lastName`, `phone`, the address fields,
+`timezone`, `bio`, `languages`, `serviceIds` and `skillIds`. `serviceIds` and
+`skillIds` replace the whole set when sent.
+
+```json
+// PATCH /v1/projects/{projectId}/suppliers/me
+{
+  "bio": "Swim coach for adults and teens.",
+  "skillIds": ["skl_01kv60qg9w4c3n8t2p6x5y7zab"]
+}
+```
+
+**Fields only the business may change** are refused. A body that names
+`active`, `email`, `externalId`, `externalData`, `maxTravelTime` or
+`defaultLocale` is refused whole, whatever the value:
+
+```json
+{
+  "code": "FIELD_NOT_SELF_EDITABLE",
+  "message": "Only staff can change: active",
+  "statusCode": 403,
+  "requestId": "c2e8a4f1-6d3b-4e97-a05c-8b1f3d6e2a74"
+}
+```
+
+Any other field the schema doesn't list is a `400 VALIDATION_ERROR`.
+
+### Change the photo
+
+1. `POST /avatar/upload-url` with `contentType` (`image/jpeg`, `image/png` or
+   `image/webp`) and `contentLength` (the real size in bytes, at most 5 MB).
+2. `PUT` the image bytes to the returned `url` within 5 minutes. Send exactly
+   the returned `headers` and no others — an extra header fails the upload.
+3. `PUT /avatar` with a body of `uploadId` and `variantId`, exactly as step 1
+   returned them.
+
+The image is resized after it lands, so step 3 often answers
+`400 BAD_REQUEST` with "Avatar variant not ready yet. Retry shortly." That is a
+retry signal: wait a second or two and call again.
+
+## Bookings and the attendance report
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | `/bookings` | The supplier's bookings in a window. |
+| `GET` | `/bookings/{bookingId}` | One booking, with its services and participants. |
+| `GET` | `/bookings/{bookingId}/reports` | Whether a report can be filed now, and the supplier's report. |
+| `POST` | `/bookings/{bookingId}/reports` | Files the supplier's attendance report. |
+
+The client is shown as the service's settings allow the supplier to see them —
+for example, a last initial instead of a last name, and no email or phone.
+Booking notes and the client's own report are never returned.
+
+### The day's agenda
+
+1. List the window:
+
+   ```
+   GET /v1/projects/{projectId}/suppliers/me/bookings?startDate=2026-10-20T04:00:00.000Z&endDate=2026-10-21T04:00:00.000Z&expand=client,services,location,participants,myReport
+   ```
+
+   The list isn't paginated, so keep the window short — a day or a week. Every
+   `expand` value except `client` needs both dates, at most 93 days apart.
+2. Read `viewerActions` on each row: `canCancel`, `canReschedule`, and
+   `blockedReason` when an action is blocked. The server computes them; use them
+   to show or hide the cancel and move buttons.
+3. `GET /bookings/{bookingId}` for the detail.
+
+### File the report
+
+After the booking ends, `GET /bookings/{bookingId}/reports`. `reportable` says
+whether a report may be filed now. `ifAttended` and `ifNotAttended` say which
+status each answer would move the booking to.
+
+Then `POST /bookings/{bookingId}/reports`:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/bookings/{bookingId}/reports
+{
+  "attended": true,
+  "note": "Lesson ran to the full hour."
+}
+```
+
+`attended` says whether **the supplier** attended. Filing settles the booking
+as the dashboard does: attended → `COMPLETED`, not attended →
+`SUPPLIER_NO_SHOW`.
+
+| Status and `code` | What it means |
+| --- | --- |
+| `201` | Filed. |
+| `200` | The same answer was already on file. |
+| `409 REPORT_ALREADY_EXISTS` | A different answer is already on file. |
+| `409 BOOKING_ALREADY_SETTLED` | The booking is already settled. |
+| `422 BOOKING_NOT_REPORTABLE` | The booking is cancelled, or hasn't ended yet. |
+
+## Cancel and reschedule
+
+| Method | Path | Body |
+| --- | --- | --- |
+| `POST` | `/bookings/{bookingId}/cancel` | `reasonCode`, optional `note` |
+| `PATCH` | `/bookings/{bookingId}` | `startTime`, a UTC instant |
+
+Both return `200` with the updated booking, and email the client and the
+business. Your portal never refunds. A cancelled package session goes back on
+the package.
+
+**Whether a supplier may do either is the service's setting.** The business sets
+it per service in [`participantSettings`](/concepts/booking-engine-model#participant-settings):
+may suppliers cancel, may they reschedule, and the notice window for each.
+There's no separate permission for it.
+
+### Move a booking
+
+1. Read `viewerActions.canReschedule` on the booking. When it's `false`, show
+   `blockedReason` if there is one; otherwise say the business handles changes.
+2. Send the new start:
+
+   ```json
+   // PATCH /v1/projects/{projectId}/suppliers/me/bookings/{bookingId}
+   {
+     "startTime": "2026-10-23T14:00:00.000Z"
+   }
+   ```
+
+3. On `409 SLOT_UNAVAILABLE`, offer another time. On `409 VERSION_CONFLICT`,
+   re-read the booking and try again.
+
+A move changes the time only. The length, supplier, location and zone stay.
+
+### Cancel a booking
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/bookings/{bookingId}/cancel
+{
+  "reasonCode": "SUPPLIER_UNAVAILABLE",
+  "note": "Pool closed for maintenance that morning."
+}
+```
+
+`reasonCode` is one of `CLIENT_REQUESTED`, `CLIENT_UNWELL`,
+`SUPPLIER_UNAVAILABLE`, `WEATHER`, `FACILITY_UNAVAILABLE`, `BOOKED_IN_ERROR` or
+`OTHER`. The `note` stays on the booking's history and is never emailed.
+
+### When a change is refused
+
+| Status and `code` | What it means |
+| --- | --- |
+| `404 NOT_FOUND` | Not their booking, or no such booking. The two are identical. |
+| `403 PARTICIPANT_ACTION_DISABLED` | The service doesn't let suppliers cancel (or move) bookings. The supplier contacts the business. |
+| `409 BOOKING_NOT_SCHEDULED` | The booking is no longer `SCHEDULED` — already cancelled, completed and so on. |
+| `409 NOTICE_WINDOW_PASSED` | Too close to the start to change. |
+| `409 VERSION_CONFLICT` | The booking changed since you read it. Re-read and try again. |
+| `422 NEW_START_INSIDE_NOTICE_WINDOW` | Move only: the new time is itself inside the notice window. |
+| `409 SLOT_UNAVAILABLE` | Move only: the new time is outside working hours, in blocked time, or overlaps another booking. |
+| `409 SLOT_UNVERIFIABLE` | Move only: availability couldn't be checked, so nothing changed. |
+| `400 VALIDATION_ERROR` | An unknown `reasonCode`, or a `startTime` that isn't an instant. |
+
+For example, a move on a service that doesn't allow it:
+
+```json
+{
+  "code": "PARTICIPANT_ACTION_DISABLED",
+  "message": "This service does not let suppliers reschedule bookings",
+  "statusCode": 403,
+  "requestId": "7e3a9c1d-2f5b-4d86-8a0e-6c4b2d9f1e57"
+}
+```
+
+## Hours and blocked time
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET`, `POST` | `/schedules` | List and create working hours. |
+| `GET`, `PATCH`, `DELETE` | `/schedules/{scheduleId}` | Read, change (send `version`), delete (`204`). |
+| `POST` | `/schedules/{scheduleId}/clone` | A copy, created `INACTIVE` for editing. |
+| `GET`, `POST` | `/blocked-times` | List and create blocked time. |
+| `GET`, `PATCH`, `DELETE` | `/blocked-times/{blockedTimeId}` | Read, change (send `version`), delete (`204`). |
+| `POST` | `/availability-timezone/apply-profile` | Moves every schedule and blocked time into the profile zone, keeping wall-clock times. |
+
+Lists return `ACTIVE` rows. Add `includeInactive=true` or `includeDeleted=true`
+for the others.
+
+### Set working hours
+
+1. `GET /suppliers/me/locations` for the venue picker, and
+   `GET /suppliers/me/travel-zones` for the areas.
+2. Create the schedule:
+
+   ```json
+   // POST /v1/projects/{projectId}/suppliers/me/schedules
+   {
+     "startDate": "2026-11-02",
+     "endDate": "2027-06-30",
+     "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,WE",
+     "weeklyTimeRanges": [
+       { "dayOfWeek": "MO", "startTime": "09:00", "endTime": "17:00", "crossesMidnight": false, "sortOrder": 0 },
+       { "dayOfWeek": "WE", "startTime": "12:00", "endTime": "20:00", "crossesMidnight": false, "sortOrder": 1 }
+     ],
+     "appliesToAllOfferings": true,
+     "locationRefs": [
+       { "locationId": "loc_01kv60qg4h2n7r9t3w5x8y6zab", "locationType": "PHYSICAL" }
+     ]
+   }
+   ```
+
+   Name each venue with both its `locationId` and its `locationType` from
+   `GET /suppliers/me/locations`. For an area, send `travelZoneRef` instead of,
+   or as well as, `locationRefs`. To limit the schedule to some offerings, send
+   `appliesToAllOfferings: false` and their `serviceOfferingIds`.
+3. To change it, `PATCH /schedules/{scheduleId}` with the changed fields and the
+   row's current `version`.
+
+Two `409 CONFLICT` cases to handle:
+
+- An `ACTIVE` schedule may not overlap another `ACTIVE` one.
+- A stale `version` is refused. Re-read the row and try again.
+
+Blocked time has the same shape, with `allDay` or `timeRanges`, and `notes`.
+
+### After a timezone change
+
+When a supplier changes their profile `timezone`, their rows stay in the old
+zone. `POST /availability-timezone/apply-profile` moves every schedule and
+blocked time into the profile zone, keeping wall-clock times. It answers with
+the zone and how many rows it rewrote. You can't choose the zone.
+
+## Travel zones
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET`, `POST` | `/travel-zones` | List (`includeInactive`, `includeDeleted`, `namePrefix`) and create. |
+| `GET`, `PATCH`, `DELETE` | `/travel-zones/{travelZoneId}` | Read, change (send `version`), delete (`204`, a soft delete). |
+
+A travel zone is either a circle around a centre or a drawn area:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/travel-zones
+{
+  "name": "Downtown Toronto",
+  "latitude": 43.6532,
+  "longitude": -79.3832,
+  "travelZoneType": "CIRCULAR",
+  "travelDistance": 8,
+  "travelDistanceUnit": "KM"
+}
+```
+
+For a `DRAWN` zone, send `travelRegions` (a GeoJSON `Polygon` or
+`MultiPolygon`) instead of the distance.
+
+To change a zone, `PATCH` it with the changes and its current `version`. A stale
+`version` — on `PATCH` or `DELETE` — is `409 CONFLICT`: re-read the zone and
+try again.
+
+**A geometry change moves your schedules' versions.** When the geometry changes,
+every schedule that uses the zone is recomputed and rewritten. The response
+carries `coverageRecompute: { total, failed }`. Re-read any schedule you cached
+before you next `PATCH` it. A `failed` schedule keeps its old coverage until
+it's next saved. A rename leaves schedules alone, and the response has no
+`coverageRecompute`.
+
+## Venues
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | `/suppliers/me/locations` | The venues a supplier can name in a schedule. |
+| `GET` | `/v1/projects/{projectId}/locations/{locationId}` | One location, with the API key alone. |
+
+`GET /suppliers/me/locations` returns the project's active `PHYSICAL` and
+`VIRTUAL` locations, sorted by name, in one response. It has no travel
+settings.
+
+To show where a booking takes place, look up its `locationId` with the key-only
+[`GET /locations/{locationId}`](/resources/locations). It returns inactive
+locations too, so a booking at a venue that has since closed still resolves.
+
+## Demand and search insights
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | `/demand` | Booked, searched and unfilled demand by hour of the week. |
+| `POST`, `DELETE` | `/demand/suggestions/{key}/dismiss` | Hide a suggestion for 90 days, or undo that. |
+| `GET` | `/search-insights` | How often the supplier was shown, seen and booked from search. |
+
+1. `GET /demand?area=zone&days=30`. `area` is `zone` (the default) or `wider`,
+   the zone plus a 15-minute drive. `days` is `30` (the default), `90` or `180`.
+   `state` is `ok`, `not_enough_data` (fewer than 20 bookings, and no grid) or
+   `no_area`.
+2. To hide a suggestion, `POST /demand/suggestions/{key}/dismiss` with its
+   `key` from the response — for example `open:WED:14:00-16:00`. `DELETE` the
+   same path to show it again. Both are idempotent.
+3. `GET /search-insights?days=28`. `days` is `7`, `28` (the default) or `90`.
+   For a custom range, send `from` and `to` (`YYYY-MM-DD`, at most 365 days)
+   instead.
+
+The business switches each insight on per project. While a switch is off, its
+routes answer:
+
+```json
+{
+  "code": "INSIGHTS_DISABLED",
+  "message": "Supplier insights (demand) are turned off for this project",
+  "statusCode": 403,
+  "requestId": "1f6c3b8e-4a2d-4e59-9b07-3d5a8c2e6f41"
+}
+```
+
+Search insights count only searches your site reported as drawn. See
+[Report site events](/guides/report-site-events).
+
+## Not on the supplier plane yet
+
+These dashboard features have no supplier-plane route yet. Suppliers use the
+dashboard for them:
+
+- **Alerts** — the in-app notifications a supplier sees.
+- **Google Calendar** — connecting a supplier's calendar.
+- **Invitations** — inviting a supplier into the project.
+- **Portal links** — MarketBox emails and pages linking back to your portal
+  instead of the dashboard.
+
+## Reference
+
+### Endpoints used in this guide
+
+Every route on the supplier plane takes the API key and the supplier's access
+token.
+
+| Endpoint | Methods |
+| --- | --- |
+| `/v1/projects/{projectId}/suppliers/me` | `GET`, `PATCH` |
+| `/v1/projects/{projectId}/suppliers/me/avatar/upload-url` | `POST` |
+| `/v1/projects/{projectId}/suppliers/me/avatar` | `PUT`, `DELETE` |
+| `/v1/projects/{projectId}/suppliers/me/bookings` | `GET` |
+| `/v1/projects/{projectId}/suppliers/me/bookings/{bookingId}` | `GET`, `PATCH` |
+| `/v1/projects/{projectId}/suppliers/me/bookings/{bookingId}/cancel` | `POST` |
+| `/v1/projects/{projectId}/suppliers/me/bookings/{bookingId}/reports` | `GET`, `POST` |
+| `/v1/projects/{projectId}/suppliers/me/schedules` | `GET`, `POST` |
+| `/v1/projects/{projectId}/suppliers/me/schedules/{scheduleId}` | `GET`, `PATCH`, `DELETE` |
+| `/v1/projects/{projectId}/suppliers/me/schedules/{scheduleId}/clone` | `POST` |
+| `/v1/projects/{projectId}/suppliers/me/blocked-times` | `GET`, `POST` |
+| `/v1/projects/{projectId}/suppliers/me/blocked-times/{blockedTimeId}` | `GET`, `PATCH`, `DELETE` |
+| `/v1/projects/{projectId}/suppliers/me/availability-timezone/apply-profile` | `POST` |
+| `/v1/projects/{projectId}/suppliers/me/travel-zones` | `GET`, `POST` |
+| `/v1/projects/{projectId}/suppliers/me/travel-zones/{travelZoneId}` | `GET`, `PATCH`, `DELETE` |
+| `/v1/projects/{projectId}/suppliers/me/locations` | `GET` |
+| `/v1/projects/{projectId}/suppliers/me/demand` | `GET` |
+| `/v1/projects/{projectId}/suppliers/me/demand/suggestions/{key}/dismiss` | `POST`, `DELETE` |
+| `/v1/projects/{projectId}/suppliers/me/search-insights` | `GET` |
+
+Key-only routes the portal also uses, with the API key alone:
+
+| Endpoint | Methods |
+| --- | --- |
+| `/v1/projects/{projectId}/services` | `GET` |
+| `/v1/projects/{projectId}/skills` | `GET` |
+| `/v1/projects/{projectId}/locations/{locationId}` | `GET` |

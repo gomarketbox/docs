@@ -168,6 +168,51 @@ touching payment at all, then layer Stripe on top separately. See
 charging an order works once you're ready for it.
 </Note>
 
+## Participant settings
+
+Each service carries `participantSettings`: what suppliers and clients may do
+with, and see on, bookings of that service. You read them on
+`GET .../services` and `GET .../services/{serviceId}`, and set them on
+`POST .../services` and `PUT .../services/{serviceId}`.
+
+```json
+{
+  "supplier": {
+    "canCancelBookings": false,
+    "cancelNoticeHours": 24,
+    "canRescheduleBookings": true,
+    "rescheduleNoticeHours": 24,
+    "canSeeClientLastName": true,
+    "canSeeClientEmail": false,
+    "canSeeClientPhone": false
+  },
+  "client": {
+    "canRescheduleBookings": true,
+    "rescheduleNoticeHours": 24,
+    "participantDisplay": "FULL"
+  }
+}
+```
+
+| Field | What it controls |
+| --- | --- |
+| `supplier.canCancelBookings`, `supplier.cancelNoticeHours` | Whether suppliers may cancel their upcoming bookings, and until how many hours before the start. `0` means any time before the start. |
+| `supplier.canRescheduleBookings`, `supplier.rescheduleNoticeHours` | The same, for moving a booking to another time with the same supplier. |
+| `supplier.canSeeClientLastName` | When `false`, suppliers see the client's first name and last initial only. |
+| `supplier.canSeeClientEmail`, `supplier.canSeeClientPhone` | Whether suppliers see the client's email and phone. |
+| `client.canRescheduleBookings`, `client.rescheduleNoticeHours` | Whether clients may move their own upcoming sessions. Clients can't cancel. |
+| `client.participantDisplay` | How other participants are named to clients on their own bookings: `FULL`, `FIRST_NAME` or `HIDDEN` (a count only). |
+
+**It is replaced whole on `PUT`.** Send every field, or omit
+`participantSettings` to leave the settings unchanged. The one exception is
+`client.participantDisplay`: omitted, it keeps its stored value.
+
+The settings bind suppliers and clients acting for themselves — for example on
+the [supplier plane](/guides/build-a-supplier-portal#cancel-and-reschedule),
+where a disabled action is `403 PARTICIPANT_ACTION_DISABLED` and a passed
+notice window is `409 NOTICE_WINDOW_PASSED`. Your API-key calls act for the
+business, and the settings don't restrict them.
+
 ## Where to go next
 
 <CardGroup cols={2}>

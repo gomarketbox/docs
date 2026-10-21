@@ -17,6 +17,11 @@ The detail endpoint is a superset. The list omits `rating` and `availability`
 on purpose — each costs an extra read per supplier, and a 200-row page should
 not pay for data a directory does not show.
 
+Both answer for **your application**, with the API key alone. A supplier
+managing their own profile, bookings and hours through your portal uses the
+**supplier plane** instead — `/v1/projects/{projectId}/suppliers/me`, with the
+supplier's user token. See [The supplier's own view](#the-suppliers-own-view).
+
 ## Booking identity
 
 A supplier response is not just display content. These are the fields you need
@@ -436,6 +441,12 @@ Treat `nextCursor: null` as the **only** end-of-results signal — never stop on
 a page that merely looks short. A cursor is valid only against the filter set
 that produced it; change a filter mid-walk and restart.
 
+Every page of one listing carries the same `searchId` (also the
+`X-MB-Search-Id` header; the cursor keeps it), and each row a 0-based
+`position`, continuous across pages. If you draw the list for clients, report
+it with that `searchId` so suppliers' insights count it. See
+[Report site events](/guides/report-site-events#search-ids).
+
 ## Managing suppliers
 
 Supplier management is normally done in the MarketBox dashboard, but the public
@@ -469,9 +480,27 @@ An unparseable phone or a malformed locale is a `400 VALIDATION_ERROR` — the
 row is not written. A `PUT` with `"phone": "(416) 555-0134"` reads back as
 `"phone": "+14165550134"`.
 
-Schedules are **not** writable through the public API. A supplier created here
+Schedules are **not** writable with the API key alone. A supplier created here
 has no schedule, so `availability.schedules` is `[]` and they cannot be booked
-until an operator sets working hours in the dashboard.
+until working hours are set — by an operator in the dashboard, or by the
+supplier themselves through your portal, on the
+[supplier plane](/guides/build-a-supplier-portal#hours-and-blocked-time).
+
+## The supplier's own view
+
+The **supplier plane** lets a supplier who signs in to your portal act on their
+own record: their profile and photo, their bookings and attendance reports,
+cancelling and moving bookings when the service allows it, their working hours,
+blocked time and travel zones, and their demand and search insights.
+
+Every route sits under `/v1/projects/{projectId}/suppliers/me` and takes both
+the API key and the supplier's user token. The API never takes a supplier id
+there: `me` is the supplier the token belongs to. See
+[Build a supplier portal](/guides/build-a-supplier-portal).
+
+`GET /v1/projects/{projectId}/suppliers/me` also returns the fields the public
+detail endpoint leaves out: phone, email, address, `active`, timezone, and the
+service and skill ids.
 
 ## Bookings for one supplier
 
@@ -498,3 +527,5 @@ See [Bookings](/resources/bookings).
 - `PUT /v1/projects/{projectId}/suppliers/{supplierId}/avatar`
 - `DELETE /v1/projects/{projectId}/suppliers/{supplierId}/avatar`
 - `POST /v1/projects/{projectId}/availability/suppliers`
+- `GET /v1/projects/{projectId}/skills` — see [Locations and skills](/resources/locations#skills)
+- The supplier plane, `/v1/projects/{projectId}/suppliers/me` and below — see [Build a supplier portal](/guides/build-a-supplier-portal#reference)

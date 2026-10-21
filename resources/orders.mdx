@@ -164,6 +164,34 @@ the price in the MarketBox console when they created the order, so
 `priceRuleId` is null and `unitPrice` matches no rule. Items written before the
 field existed have no `priceSource`.
 
+### Attribution
+
+Send `attribution` to record which search and site session the purchase came
+from:
+
+```json
+{
+  "clientId": "cli_456",
+  "currency": "USD",
+  "attribution": {
+    "searchId": "<searchId from the search response>",
+    "sessionKey": "sess-4f9a2c",
+    "surface": "results"
+  }
+}
+```
+
+- `searchId` — the `searchId` of the search response the client booked from.
+- `sessionKey` — the opaque per-session key you send with site events, at most
+  64 characters. Never an email, IP address or user id.
+- `surface` — where on your site the purchase started: `home`, `results`,
+  `listing`, `site_search`, `profile`, `widget`, `assistant` or `other`.
+
+It is optional, stored as given, and readable on the order. It is copied onto
+every booking the order funds, so you can't set it on a booking, a hold or a
+package booking directly. A `searchId` MarketBox never issued is kept but not
+counted. See [Report site events](/guides/report-site-events#tie-a-purchase-to-its-search).
+
 ## Managing items
 
 Items have their own sub-resource under an order:

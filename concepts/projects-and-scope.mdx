@@ -66,4 +66,7 @@ A handful of endpoints are unversioned and project-agnostic:
 | `GET /v1/openapi.json`  | No               | Machine-readable spec for codegen.   |
 
 Every other endpoint — for example `/v1/projects/{projectId}/bookings` —
-requires a valid API key and a matching project scope.
+requires a valid API key and a matching project scope. The one exception is
+the browser beacon, `POST /v1/projects/{projectId}/events/beacon`: it takes a
+publishable key that belongs to the project instead. See
+[Report site events](/guides/report-site-events#send-events-from-the-browser).

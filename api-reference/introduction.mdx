@@ -16,10 +16,17 @@ direct projection of what the running service accepts and returns.
 
 ## Authentication
 
-Every endpoint under `/v1` requires an `x-api-key` header. The
-playground accepts your key in the authorization slot.
+Every endpoint under `/v1` requires an `x-api-key` header, with one
+exception: the browser beacon for site events takes a publishable key in
+its query string. The playground accepts your key in the authorization slot.
 
-See [Authentication](/concepts/authentication) for the full model.
+The end-user routes — the client's `/clients/me` and the supplier's
+`/suppliers/me` — also take the signed-in person's access token as
+`Authorization: Bearer <token>`.
+
+See [Authentication](/concepts/authentication) and
+[End-user authentication](/concepts/end-user-authentication) for the full
+model.
 
 ```http
 x-api-key: mb_test_********************************
@@ -60,7 +67,22 @@ Endpoints are grouped by tag in the sidebar:
     package slate — then convert the hold into bookings.
   </Card>
   <Card title="Suppliers" icon="user-tie" href="/resources/suppliers">
-    Read-only list of suppliers in a project, enriched with services and skills.
+    Suppliers in a project, enriched with services and skills — listed,
+    read and managed with the API key.
+  </Card>
+  <Card title="Supplier plane" icon="id-badge" href="/guides/build-a-supplier-portal">
+    A signed-in supplier's own profile, bookings, hours, travel zones and
+    insights, under `/suppliers/me`.
+  </Card>
+  <Card title="Clients" icon="user" href="/guides/booking-flow-auth">
+    A signed-in client's onboarding, profile, addresses and credits, under
+    `/clients/me`.
+  </Card>
+  <Card title="Locations and skills" icon="location-dot" href="/resources/locations">
+    The project's venues, travel-zone areas and supplier skills.
+  </Card>
+  <Card title="Events" icon="chart-line" href="/guides/report-site-events">
+    Report which suppliers your site showed, and what clients saw and opened.
   </Card>
 </CardGroup>
 

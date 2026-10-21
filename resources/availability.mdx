@@ -82,18 +82,34 @@ The response envelope:
 ```json
 {
   "status": "success",
+  "searchId": "<the search's id>",
+  "engineEnabled": true,
   "timeSlots": [
     { "supplierId": "sup_…", "timeSlotDateAndTime": "2026-06-23T10:00:00-04:00", "timeSlotStartUtc": "2026-06-23T14:00:00.000Z", "travelType": "TO-NEXT-BOOKING", "travelTimeMins": 8 }
   ],
   "openSlots": [ { "supplierId": "sup_…", "timeSlotId": "…", "timeSlotDateAndTime": "2026-06-23T09:15:00-04:00", "timeSlotStartUtc": "2026-06-23T13:15:00.000Z" } ],
   "timezone": "America/Toronto",
   "supplierZones": { "sup_…": "America/Toronto" },
+  "suppliers": [ { "supplierId": "sup_…", "position": 0 } ],
   "errors": []
 }
 ```
 
 No matching suppliers returns the same envelope with empty
 `timeSlots` / `openSlots` and `errors: []`.
+
+<Warning>
+  **Check `engineEnabled` before you say nobody is free.** It is `false` when
+  the project has switched its scheduling engine off. The engine then doesn't
+  run, so `timeSlots` is empty because it wasn't computed, not because nobody
+  is free. `openSlots` is unaffected.
+</Warning>
+
+`searchId` identifies this search; it is also the `X-MB-Search-Id` header.
+`suppliers` lists each supplier that appears in `timeSlots` or `openSlots`,
+with its `position`: the 0-based rank of its first slot, `timeSlots` first.
+Keep the `searchId` for the session, and report what you draw with it. See
+[Report site events](/guides/report-site-events#search-ids).
 
 ### Slot times and zones
 
@@ -114,6 +130,24 @@ own profile zone. Use it as the `bookingTz` for a **virtual** booking with no
 service location — the location's zone wins when there is one, then the
 supplier's, then the project default. A supplier missing from the map has no
 profile zone; fall back to the project default.
+
+### Search ids on every availability route
+
+Every route on this page returns a `searchId`, in the body and in the
+`X-MB-Search-Id` header:
+
+- `/suppliers` — the same `searchId` on every page (the cursor keeps it), and
+  each supplier a `position`, continuous across pages.
+- `package-slate` — a `searchId`, and each slate a `position` across the whole
+  response.
+- `package-options` — a `searchId`, and each slate a `position` within its
+  package.
+- `time-slots` — a `searchId`, but nothing from it is logged for insights.
+
+You may tag any of them with two optional headers, stored for insights and
+never acted on: `X-MB-Session-Key` (an opaque session key, at most 64
+characters) and `X-MB-Client-Kind` (`browser`, `server`, `monitor` or
+`loadtest`).
 
 ## Recurring search
 
@@ -321,7 +355,7 @@ whole request.
 | Status | When                                                                 |
 | ------ | -------------------------------------------------------------------- |
 | `400`  | Missing location, missing `rrule` on a recurring request, recurring `rrule` without `COUNT`, a `timezone` that is not an IANA identifier, a `lookAheadStartDate` that does not parse, a package `lookAheadStartDate` using `Z`, or `time-slots` without `suppliers`. |
-| `403`  | Missing or unrecognised API key — rejected at the edge, before any scope check — or a key that cannot access this project. |
+| `403`  | Missing or unrecognised API key — rejected at the edge, before any scope check — or a key that cannot access this project, or one without Standard API access (`CAPABILITY_NOT_GRANTED`). |
 | `404`  | `package-options` only — the service doesn't exist in this project.  |
 | `422`  | `package-slate` only — nothing bookable: no `primarySlate`, no `partial`, and no `cadenceAlternatives`. The `code` is `NO_COMPLETE_SLATE` or `NO_AVAILABILITY`. |
 

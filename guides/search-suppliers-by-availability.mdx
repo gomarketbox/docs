@@ -66,8 +66,10 @@ time you could book this person," not a ranked shortlist.
 
 ```json
 {
+  "searchId": "<the search's id>",
   "data": [
     {
+      "position": 0,
       "supplier": {
         "supplierId": "sup_01kv60qgnef2kt3pvqgwmkbzfr",
         "firstName": "Priya",
@@ -98,6 +100,7 @@ time you could book this person," not a ranked shortlist.
       ]
     },
     {
+      "position": 1,
       "supplier": { "supplierId": "sup_01kv60qh9zt1q7", "firstName": "Sam", "lastName": "Okafor", "avatarUrl": null },
       "days": []
     }
@@ -110,7 +113,9 @@ time you could book this person," not a ranked shortlist.
 
 | Field | Meaning |
 | --- | --- |
+| `searchId` | The id of this search, also the `X-MB-Search-Id` header. The same on every page; the cursor keeps it. Keep it to [report what you drew](/guides/report-site-events#search-ids) and to attribute the purchase. |
 | `data[]` | Suppliers on this page, in a stable order across pages. |
+| `data[].position` | The supplier's 0-based rank as returned, continuous across pages: the first supplier on page 2 is numbered after the last on page 1. |
 | `data[].supplier` | The **full enriched supplier** — the exact shape `GET /suppliers` returns (profile, `avatarUrl`, `services`, `skills`, `locations`, `servedRegions`). Enough to render a card with no follow-up call. |
 | `data[].days[]` | Days that have open slots, ascending by `date`. Empty (`[]`) for a supplier who matches but has nothing open in the window — see the note below. |
 | `data[].days[].date` | Local calendar date (`YYYY-MM-DD`) in the request `timezone`. Bucket key for a day column. |
@@ -572,7 +577,7 @@ needs no service or offering, so it separates "nobody serves here" from
 
 See [Errors](/concepts/errors) for the full envelope and code list, and
 [Pagination](/concepts/pagination) for how the opaque `cursor` works across
-every list endpoint.
+the paginated list endpoints.
 
 <CardGroup cols={2}>
 <Card title="Create a single booking" icon="calendar-check" href="/guides/create-a-single-booking">

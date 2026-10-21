@@ -24,7 +24,9 @@ Creating an Application issues two things:
   config.
 - A **one-time API key** — shown once, in the "Application created" dialog. Copy
   it now; it cannot be retrieved later. This is the server-only secret from
-  [Authentication](/concepts/authentication).
+  [Authentication](/concepts/authentication). It needs **Standard API access**,
+  the default; a key without it is refused with `403 CAPABILITY_NOT_GRANTED`.
+  See [Capabilities](/concepts/authentication#capabilities).
 
 The dialog also shows a **Connection details** block of per-environment
 constants. The same block is available any time on the **Connection details**
@@ -143,6 +145,12 @@ const user = await um.getUser();
 const accessToken = user?.access_token ?? null;
 ```
 
+Forward the **access token**, not the ID token. It must come from your own
+Application's `clientId`: a token issued to another client — the MarketBox
+dashboard's or another Application's — is logged today and will be refused
+with `401` once enforcement is switched on. See
+[End-user authentication](/concepts/end-user-authentication#where-the-user-token-comes-from).
+
 Call your backend to onboard the user immediately after the first sign-in
 (see [Onboard the client](#onboard-the-client)).
 </Step>
@@ -215,8 +223,24 @@ authenticated sign-in. It is **idempotent**: `201` the first time, `200` on ever
 later call, so it's safe to call on every callback.
 
 On the first call it provisions the signed-in user as a **client** of the
-project — a project membership and a client profile, plus a Stripe Connect
-`stripeCustomerId` on that profile when the project has payments configured.
+project — an `ACTIVE` project membership with the `CLIENT` role and a client
+profile, plus a Stripe Connect `stripeCustomerId` on that profile when the
+project has payments configured.
+
+Every other `/clients/me` route requires that `ACTIVE` membership. See
+[Who may call an end-user route](/concepts/end-user-authentication#who-may-call-an-end-user-route).
+
+If the business has removed the person's access, onboarding refuses them, and
+nothing is read or linked:
+
+```json
+{
+  "code": "MEMBERSHIP_INACTIVE",
+  "message": "Your access to this business was removed. Ask them to invite you again.",
+  "statusCode": 403,
+  "requestId": "5c9e2a7f-8b3d-4e16-a4f0-1d7b6c3e9a25"
+}
+```
 
 ### Send the name your checkout collected
 
@@ -326,9 +350,11 @@ They are per-environment, not per-application.
 
 | Scenario | HTTP status | Resolution |
 | --- | --- | --- |
-| Missing or invalid user token on an end-user route | `401` | Ensure the browser sends a valid `Authorization: Bearer` header and that the BFF forwards it. |
-| API key present but no bearer on an end-user route | `401` | End-user routes require both planes. |
-| Valid token but the user isn't a client of the project yet | `403` | Call onboarding (`POST .../clients/me`) for the signed-in user before other end-user routes. |
+| Missing or invalid user token on an end-user route | `401` | Ensure the browser sends a valid `Authorization: Bearer` header and that the BFF forwards it. Sign the user in again. |
+| API key present but no bearer on an end-user route | `401` | End-user routes require both credentials. |
+| Valid token but the user isn't a client of the project yet | `403 FORBIDDEN`, "No active membership on this project" | Call onboarding (`POST .../clients/me`) for the signed-in user before other end-user routes. |
+| The business removed the client's access | `403 MEMBERSHIP_INACTIVE` on onboarding; `403 FORBIDDEN` on the other `/clients/me` routes | The client asks the business to invite them again. |
+| The API key lacks Standard API access | `403 CAPABILITY_NOT_GRANTED` | A project admin ticks **Standard API access** on the Application. |
 | The API key's project scope doesn't include the requested project | `403` | The Application is scoped to a different project. Create an Application scoped to the correct project, or use a wildcard-scoped key if permitted. See [Projects and scope](/concepts/projects-and-scope). |
 
 ### Security checklist

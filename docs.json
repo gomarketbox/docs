@@ -53,7 +53,9 @@
               "guides/hold-slots-for-checkout",
               "guides/search-suppliers-by-availability",
               "guides/booking-addresses",
-              "guides/accept-payments-with-stripe"
+              "guides/accept-payments-with-stripe",
+              "guides/build-a-supplier-portal",
+              "guides/report-site-events"
             ]
           },
           {
@@ -62,6 +64,7 @@
               "resources/bookings",
               "resources/orders",
               "resources/suppliers",
+              "resources/locations",
               "resources/availability",
               "resources/reviews"
             ]

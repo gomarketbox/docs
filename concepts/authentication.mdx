@@ -8,10 +8,16 @@ in the `x-api-key` header. The key identifies *your application* and behaves
 as a long-lived service credential, minted in the MarketBox dashboard.
 
 Some routes also act on behalf of a *signed-in end user* and additionally
-require a per-user token. Those routes are the exception — most of the API
+require a per-user token: the client's `/clients/me` routes and the supplier's
+`/suppliers/me` routes. Those routes are the exception — most of the API
 needs only the API key. See
-[End-user authentication](/concepts/end-user-authentication) for that second
-plane and when you need it.
+[End-user authentication](/concepts/end-user-authentication) for those planes
+and when you need them.
+
+One route takes a third credential: the browser beacon for site events,
+`POST /v1/projects/{projectId}/events/beacon`, takes a **publishable key** in
+its query string instead of an API key. See
+[Report site events](/guides/report-site-events#send-events-from-the-browser).
 
 ## The header
 
@@ -60,6 +66,7 @@ metadata against it:
 | `friendlyName`  | Human-readable label, shown only in the dashboard.                     |
 | `userId`        | The MarketBox user who owns the key. Becomes the `tenantId` on writes. |
 | `projectScope`  | Which projects the key may act on. See below.                          |
+| `capabilities`  | Which kinds of route the key may call. See [Capabilities](#capabilities). |
 | `createdAt`     | When the key was minted.                                               |
 | `lastUsedAt`    | Updated periodically as the key is used (not on every request).        |
 
@@ -96,6 +103,45 @@ request, the API:
 
 You'll get a `403` — not a `404` — if a project exists but your key isn't
 scoped to it. A `404` means the project itself doesn't exist.
+
+## Capabilities
+
+Project scope says **which projects** a key may act on. Capabilities say **which
+kinds of route** it may call. A project admin sets them on the Application, on
+the **API Access** page of the dashboard:
+
+| Capability | Dashboard label | What it allows |
+| --- | --- | --- |
+| `*` | **Standard API access** | Every route in this API, including both end-user planes — except the site-events route. |
+| `events:write` | **Site events** | `POST /v1/projects/{projectId}/events`. |
+| `events:import` | **Historical event import** | Sending site events up to 400 days old (with `events:write`). |
+
+Two rules to know:
+
+- **`*` doesn't include the event capabilities.** A key reports site events
+  only if `events:write` was granted by name. Without it, the events route
+  answers `403 FORBIDDEN`.
+- **A key without `*` can call nothing else.** A key with no capabilities
+  ticked, or only **Site events**, is refused on every other route — before the
+  project, the user token or any data is read.
+
+A key minted before capabilities existed carries no list, and is treated as
+`*`. It keeps working as before.
+
+### When the key lacks Standard API access
+
+```json
+{
+  "code": "CAPABILITY_NOT_GRANTED",
+  "message": "This API key has no capabilities, so it can call nothing on the open API. A project admin grants them on the dashboard's API Access screen.",
+  "statusCode": 403,
+  "requestId": "2d8f4b6a-3c1e-4f97-8a25-7e0b9c3d1f64"
+}
+```
+
+A key that holds only some capabilities gets the same `code`, and a `message`
+naming what it holds. To fix it, a project admin ticks **Standard API access**
+on the Application. A key may hold `*` and `events:write` together.
 
 ## Rotating keys
 
