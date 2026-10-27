@@ -104,7 +104,7 @@ Open <http://localhost:3000>.
 Changes pushed to the default branch of
 [`gomarketbox/docs`](https://github.com/gomarketbox/docs) deploy
 automatically via the Mintlify GitHub app, installed on the `gomarketbox`
-org. The live site is <https://docs.gomarketbox.com>.
+org. The live site is <https://marketboxinc.mintlify.app>.
 
 ## Resources
 
