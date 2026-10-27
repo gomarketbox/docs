@@ -307,7 +307,8 @@ POST /v1/projects/{projectId}/availability/package-slate
 
 Builds a **slate** — a complete N-session plan for a package, from a single
 supplier's availability. Pass a `packageId` (the session count, service and
-offering are derived from it), a location, an IANA `timezone`, a
+offering are derived from it) — or, to plan what is left on a credit the
+client already owns, its `orderId` and `orderItemId` — plus a location, an IANA `timezone`, a
 `lookAheadStartDate` carrying a numeric offset, and an `rrule` with a bounded
 `COUNT`. The returned `primarySlate.slateId` books the whole plan in one call
 via `POST /v1/projects/{projectId}/orders/{orderId}/package-bookings`.
@@ -323,6 +324,15 @@ the supplier's, else the project default — not the `timezone` you sent.
 Responses are `200` when anything is bookable and `422` when nothing is —
 specifically, when `primarySlate`, `partial` **and** `cadenceAlternatives`
 are all empty.
+
+Planning from a credit uses its remaining sessions (`quantityRemaining`
+replaces the `rrule`'s `COUNT`), its own service and offering, and ends at its
+`expiresAt`. It works after the package was deleted. Send exactly one source:
+neither or both is a `400`. A credit that can't be planned is refused before
+any search: `409 ORDER_CANCELLED`, `409 ORDER_ITEM_QUANTITY_UNAVAILABLE` (no
+sessions left), `409 PACKAGE_EXPIRED`, `400 NOT_A_PACKAGE_ITEM`,
+`400 INVALID_ORDER_REFERENCE`, or `404 NOT_FOUND` for an unknown item. See
+[Create a package booking](/guides/create-a-package-booking#book-the-sessions-left-on-a-credit).
 
 <Note>
   **Cadence relaxation.** By default a supplier who can't meet your exact
@@ -356,7 +366,8 @@ whole request.
 | ------ | -------------------------------------------------------------------- |
 | `400`  | Missing location, missing `rrule` on a recurring request, recurring `rrule` without `COUNT`, a `timezone` that is not an IANA identifier, a `lookAheadStartDate` that does not parse, a package `lookAheadStartDate` using `Z`, or `time-slots` without `suppliers`. |
 | `403`  | Missing or unrecognised API key — rejected at the edge, before any scope check — or a key that cannot access this project, or one without Standard API access (`CAPABILITY_NOT_GRANTED`). |
-| `404`  | `package-options` only — the service doesn't exist in this project.  |
+| `404`  | `package-options` — the service doesn't exist in this project. `package-slate` — the package, or the credit's order item, doesn't exist. |
+| `409`  | `package-slate` only — the credit can't be planned: no sessions left (`ORDER_ITEM_QUANTITY_UNAVAILABLE`), expired (`PACKAGE_EXPIRED`), or on a cancelled order (`ORDER_CANCELLED`). |
 | `422`  | `package-slate` only — nothing bookable: no `primarySlate`, no `partial`, and no `cadenceAlternatives`. The `code` is `NO_COMPLETE_SLATE` or `NO_AVAILABILITY`. |
 
 See [Errors](/concepts/errors) for the full error envelope.

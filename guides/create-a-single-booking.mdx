@@ -47,6 +47,7 @@ sequenceDiagram
 not when it's paid. The order stays `DRAFT` and the booking still succeeds —
 don't gate booking on Stripe. Layer payment on afterward with
 [Accept payments with Stripe](/guides/accept-payments-with-stripe).
+A `CANCELLED` order books nothing: `409 ORDER_CANCELLED`.
 </Note>
 
 <Note>
@@ -327,6 +328,7 @@ for you on the single-booking path.
 | `orderItemId` doesn't exist on that order | `INVALID_ORDER_ITEM_REFERENCE` | `400` | Re-fetch the order aggregate — you may be reusing a stale id. |
 | `orderItemId`'s service/offering doesn't match the booking's service line | `ORDER_ITEM_SERVICE_MISMATCH` | `400` | The `serviceId`/`offeringId` on the booking's service line must match the order item that funded it. |
 | Order item has no quantity left to draw down | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | `400` | A `SINGLE_SESSION` item only funds one booking. Create a new order for another session. |
+| The order is `CANCELLED` | `ORDER_CANCELLED` | `409` | Its credits were released when it was cancelled. Don't retry; create a new order. `DRAFT`, `PENDING` and `PAID` orders book as before. |
 | Offering isn't `ACTIVE` | `BAD_REQUEST` | `400` | Only active offerings can be booked or ordered. |
 | Wrong location fields for `locationType` | `VALIDATION_ERROR` | `400` | Match the table above — e.g. sending `latitude` on a `PHYSICAL` booking, or omitting `address` on `TRAVEL_ZONE`. |
 | `bookingEndUtc` not after `bookingStartUtc` | `BAD_REQUEST` | `400` | Fix the time window and retry. |

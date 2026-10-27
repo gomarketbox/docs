@@ -80,7 +80,7 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | `401`  | The user token on an end-user route (`/clients/me`, `/suppliers/me`) is missing, malformed, invalid or expired — sign the person in again. Also the beacon's publishable key, when it is missing or not live. A missing or unrecognised **API key** is `403`, not `401`. |
 | `403`  | The `x-api-key` header is missing or the key isn't recognised — rejected at the edge, before any scope check runs — or the key is valid but its `projectScope` does not allow the `{projectId}` in the URL, or it lacks the capability the route needs. On an end-user route, also: the signed-in person isn't an `ACTIVE` member of the project holding the route's permission. |
 | `404`  | The resource you targeted doesn't exist (or has been soft-deleted).                                |
-| `409`  | Version conflict on an optimistic update, the supplier's time is already booked or held, capacity exceeded, or duplicate registration. |
+| `409`  | Version conflict on an optimistic update, the supplier's time is already booked or held, capacity exceeded, duplicate registration, or a credit that can't be booked (used up, expired, or on a cancelled order). |
 | `413`  | The request body is too large — on the site-events routes, more than 256 KB per batch or 64 KB per beacon. Nothing was read. |
 | `422`  | The request is well-formed but asks for something the data cannot support: a package plan that no availability can fill, a line the service is not sold as, or a credit treatment for a booking with no credit. Nothing was written. |
 | `429`  | Too many requests from this key. Today only the site-events routes rate-limit. Retry after the `Retry-After` header. |
@@ -92,7 +92,7 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | `code`                                  | Status | Notes                                                                                   |
 | --------------------------------------- | ------ | --------------------------------------------------------------------------------------- |
 | `VALIDATION_ERROR`                      | 400    | Request body or query failed schema validation. `message` names the field.              |
-| `BAD_REQUEST`                           | 400    | Generic client-input failure covering several situations: an illegal status transition (e.g. nothing leaves `CANCELLED`; the `message` names the booking's current status), a mismatched currency between an order and an item you're adding to it, an offering that isn't `ACTIVE`, an unparseable pagination `cursor`, and other malformed input. `message` names the specific problem. |
+| `BAD_REQUEST`                           | 400    | Generic client-input failure covering several situations: an illegal status transition (e.g. nothing leaves `CANCELLED`; the `message` names the booking's current status), a mismatched currency between an order and an item you're adding to it, an offering that isn't `ACTIVE`, an unparseable pagination `cursor` (except on the supplier's alerts list, which answers `INVALID_CURSOR`), and other malformed input. `message` names the specific problem. |
 | `HTTP_ERROR`                            | 400, 401 | A request refused before its route ran. `401` on an end-user route: a missing or malformed `Authorization` header, or a user token that is invalid or expired — sign in again. `400`: a body that isn't valid JSON. |
 | `UNAUTHORIZED`                          | 401    | On an end-user route, a user token that names no user — and, once enforced, a token issued to another client. See [End-user authentication](/concepts/end-user-authentication#where-the-user-token-comes-from). A missing or unrecognised **API key** is `FORBIDDEN`. |
 | `FORBIDDEN`                             | 403    | API key is missing, isn't recognised, or cannot access this project. The first two are rejected at the edge before the request reaches the application, so `message` — not `code` — is what distinguishes them. On an end-user route, also "No active membership on this project" or "Insufficient permissions for this action". On `POST .../events`, a key without `events:write`. |
@@ -102,8 +102,9 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | `FIELD_NOT_SELF_EDITABLE`               | 403    | `PATCH .../suppliers/me` named a field only the business may change (`active`, `email`, `externalId`, `externalData`, `maxTravelTime`, `defaultLocale`). The whole body was refused. See [Build a supplier portal](/guides/build-a-supplier-portal#edit-the-profile). |
 | `INSIGHTS_DISABLED`                     | 403    | The project has switched off this supplier insight (demand, or search). Hide the insight in your portal. |
 | `NOT_FOUND`                             | 404    | Resource doesn't exist or has been soft-deleted. Also returned for a `clientId` or `supplierId` in the request body that belongs to a different project — never a `403`, so a foreign id is indistinguishable from a missing one. |
+| `INVALID_CURSOR`                        | 400    | `GET .../suppliers/me/alerts` only: the `cursor` isn't one this list issued, or came from another `filter`. Request the first page again without it. See [Build a supplier portal](/guides/build-a-supplier-portal#alerts). |
 | `VERSION_CONFLICT`                      | 409    | Concurrent modification — re-read the resource and try again.                           |
-| `CONFLICT`                              | 409    | Generic write conflict covering situations like a booking that's already at capacity, or a client that's already registered as a participant on it. `message` names the specific problem. |
+| `CONFLICT`                              | 409    | Generic write conflict covering situations like a booking that's already at capacity, or a client that's already registered as a participant on it. Also `DELETE .../suppliers/{supplierId}` when the supplier's sign-in changed during the delete — try again. `message` names the specific problem. |
 | `SLOT_BOOKED`                           | 409    | The supplier's time is already taken by a confirmed booking. `conflicts[]` names the `bookingId`. Not retryable — search availability again. |
 | `SLOT_HELD`                             | 409    | The supplier's time is claimed by a live hold — often **your own**. `conflicts[]` names the `reservationId`; convert it instead of booking directly. See [Hold slots during checkout](/guides/hold-slots-for-checkout#handling-a-held-slot). |
 | `OCCUPANCY_CONTENTION`                  | 409    | Too many concurrent writes on one supplier's day; the internal retry gave up. **Retryable** — resend after a short backoff. |
@@ -153,6 +154,36 @@ and the slate-based booking routes. Full walkthrough in
   `locationType: "TRAVEL_ZONE"` plus `latitude`, `longitude`, and `address`.
   See [Hold slots during checkout](/guides/hold-slots-for-checkout#a-travel-zone-checkout-end-to-end).
 </Warning>
+
+## Package credit codes
+
+These come from the routes that plan or book from an order's credits:
+`POST /availability/package-slate` with `orderId` + `orderItemId`,
+`POST /orders/{orderId}/package-bookings`,
+`POST /clients/me/orders/{orderId}/package-bookings`, `POST /bookings` and
+`POST /holds/{reservationId}/convert`. Full walkthrough in
+[Create a package booking](/guides/create-a-package-booking#what-a-booking-call-checks).
+
+| `code`                            | Status | What it means | What to do |
+| --------------------------------- | ------ | ------------- | ---------- |
+| `ORDER_ITEM_SERVICE_MISMATCH`     | 400    | A session or booking line names a service or offering other than the order item's. A credit books only its own offering. | Book the item's own `serviceId` and `offeringId`. Plan the slate from that package or from the credit. |
+| `ORDER_ITEM_QUANTITY_UNAVAILABLE` | 400, 409 | `400`: you asked for more sessions than the item has left, and nothing was booked. `409`: a concurrent booking used the credits after the check passed. On `package-slate`, `409`: the credit has no sessions left to plan. | Re-read `quantityRemaining` and book only what is left. |
+| `PACKAGE_EXPIRED`                 | 409    | A session starts after the order item's `expiresAt`. On `package-slate`, the credit has already expired. | Book before the expiry. An expired credit can't be planned or booked. |
+| `NOT_A_PACKAGE_ITEM`              | 400    | The `orderItemId` isn't a `PACKAGE` line. | Pass the order's `PACKAGE` item. |
+| `IDEMPOTENCY_KEY_CONFLICT`        | 409    | The `idempotencyKey` was already used with a different body. | Use a fresh key for each new attempt. The same key with the same body replays the first `201`. |
+| `ORDER_CANCELLED`                 | 409    | The order is `CANCELLED`. Its sessions were cancelled and its credits released. Also refused when converting a hold that already converted. | Don't retry. Create a new order. |
+| `CREDIT_NOT_BOOKABLE`             | 409    | `POST /clients/me/orders/{orderId}/package-bookings` only: the credit isn't one `GET /clients/me/credits` would list — the order isn't `PAID`, or the credit is used up, expired or removed. | Re-read the client's credits and offer only those listed. See [Build a booking flow](/guides/booking-flow-auth#book-a-clients-own-credit). |
+
+A cancelled order comes back as:
+
+```json
+{
+  "code": "ORDER_CANCELLED",
+  "message": "Order ord_01kx16f0a1c7b2sd91xzq3mn5p is CANCELLED",
+  "statusCode": 409,
+  "requestId": "8a3c6e25-1f9d-4b72-9e40-5d2b8c1a7f63"
+}
+```
 
 ## Supplier booking codes
 

@@ -27,6 +27,11 @@ the single arrows:
 - `CANCELLED` → nothing. Cancellation is terminal, so issue a new order
   instead.
 
+Cancelling an order cancels its remaining sessions and releases their
+credits. A `CANCELLED` order's credits can't be planned or booked: every route
+that draws them answers `409 ORDER_CANCELLED`. See
+[Create a package booking](/guides/create-a-package-booking#a-cancelled-order-books-nothing).
+
 Any other transition is a `400 BAD_REQUEST`.
 
 **You cannot request `PAID`.** An order becomes `PAID` (the double arrow) when

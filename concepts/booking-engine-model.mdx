@@ -104,7 +104,8 @@ flowchart LR
 1. **Build the slate.** `POST /availability/package-slate` with the
    `packageId`, a location, and an `rrule` (e.g. every Mon/Wed/Fri, 8
    sessions) returns a `primarySlate` with a `slateId` and the resolved
-   `slots[]`.
+   `slots[]`. To plan what is left on a credit the client already owns, send
+   its `orderId` and `orderItemId` instead of `packageId`.
 2. **Book it by id.** `POST /orders/{orderId}/package-bookings` with just
    `{ orderItemId, slateId }` — the server re-resolves every session's
    supplier, time, and location itself (including filling in the location
@@ -153,7 +154,9 @@ the full lifecycle.
 Here's the detail that trips up most integrations: **credits exist at order
 creation, not at payment.** Creating an order (with its item) immediately
 gives you something bookable, and creating a booking against that order item
-succeeds even while the order is still `DRAFT` and unpaid.
+succeeds even while the order is still `DRAFT` and unpaid. A `CANCELLED`
+order is the one exception: its credits were released when it was cancelled,
+so it plans and books nothing (`409 ORDER_CANCELLED`).
 
 Payment — via Stripe or a manual transaction — settles the order. It moves
 money and updates the order's status and paid amount. It does **not** gate

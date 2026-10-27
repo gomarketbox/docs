@@ -42,7 +42,9 @@ two advanced booking paths below.
 
 `POST /availability/package-slate` takes a `packageId` (the session count,
 service, and offering are derived from it), a location, a `timezone`, and a
-cadence (`lookAheadStartDate` + `rrule`). The response is a
+cadence (`lookAheadStartDate` + `rrule`). To plan what is left on a credit,
+send its `orderId` and `orderItemId` instead of `packageId`. See
+[Book the sessions left on a credit](/guides/create-a-package-booking#book-the-sessions-left-on-a-credit). The response is a
 `PackageSlateResponse`:
 
 ```json

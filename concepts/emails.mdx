@@ -182,6 +182,17 @@ renaming your project changes the name on the next send, including for bookings 
 change. The same goes for changing where replies go or who is copied: it applies from the next
 email onwards and does not rewrite anything already sent.
 
+## Links in supplier emails
+
+The supplier emails link to the MarketBox dashboard by default. When the
+project has a supplier portal URL, set by a project admin under **Settings ›
+Notifications › Supplier portal**, they link to your portal instead: the new
+booking, booking updated, booking cancelled, order cancelled and daily agenda
+emails. An email about exactly one booking adds its `bookingId` to the link.
+Client emails, staff copies, the supplier's rating emails and the invitation
+are unchanged. The URL can't be set through the API. See
+[Build a supplier portal](/guides/build-a-supplier-portal#links-in-marketbox-emails).
+
 ## Limits worth knowing
 
 - **There is no per-project switch to turn emails off.** Every project on MarketBox sends the full

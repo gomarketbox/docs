@@ -3,6 +3,45 @@ title: "Changelog"
 description: "New features, updates, and fixes to the MarketBox API."
 ---
 
+<Update label="October 26, 2026" tags={["API"]}>
+
+## Package credits: plan from a credit, clients book their own, and cancelled orders book nothing; supplier alerts
+
+You can now plan a slate from a credit the client already owns, and the signed-in client can book their own credit through a new client-plane route. A package credit books only its own offering, and a cancelled order's credits can no longer be planned or booked. Your supplier portal can now show the dashboard's alerts, and supplier emails can link to your portal.
+
+**Two breaking changes, two behaviour changes, the rest additive.** No field was removed or renamed. Strict response decoders need a regeneration for `quantityReturned` on `GET …/clients/me/credits`, and for the `409` bodies of `POST …/bookings` and `POST …/holds/{reservationId}/convert`, which the spec now describes as a union with the plain error envelope.
+
+**Breaking**
+
+- **A package credit books only its own service and offering.** `POST …/orders/{orderId}/package-bookings` used to accept sessions of any offering. Every service line of every session must now match the order item's `serviceId` and `offeringId`, or the call is `400 ORDER_ITEM_SERVICE_MISMATCH` and nothing is booked. This applies to `slateId`, `slotIds` and `sessions`.
+- **A `CANCELLED` order plans and books nothing.** `POST …/availability/package-slate` (from a credit), `POST …/orders/{orderId}/package-bookings`, `POST …/bookings` and `POST …/holds/{reservationId}/convert` answer `409 ORDER_CANCELLED` for an order that is `CANCELLED`. Convert refuses even a hold that already converted. `DRAFT`, `PENDING` and `PAID` orders book as before: payment is still not a gate.
+
+**Changed**
+
+- **A same-key retry replays after the credits ran out.** Retrying `POST …/package-bookings` with the same `idempotencyKey` and body now returns the stored `201`, even when the first call used the last credits. It used to be `400 ORDER_ITEM_QUANTITY_UNAVAILABLE`. A replay sends no second confirmation email. A `slateId` or `slotIds` retry must still arrive within the slate's window.
+- **A reused key with a different body is always `409 IDEMPOTENCY_KEY_CONFLICT`,** even when that body is invalid on its own. It used to get that body's `400` or `404`.
+- **Stale-slate `freshSuggestions` are planned from the order item you are booking** — its remaining sessions, offering and expiry — so they can be booked on it. `null` when the item has nothing left to plan.
+- **`DELETE …/suppliers/{supplierId}` can answer `409 CONFLICT`** when the supplier's sign-in changes during the delete. Try again.
+
+**New**
+
+- **Plan a slate from a credit.** `POST …/availability/package-slate` takes `orderId` + `orderItemId` instead of `packageId`. It plans the credit's remaining sessions in its own offering, ends at its `expiresAt`, and works after the package was deleted. Send exactly one source. A credit that can't be planned is `409 ORDER_ITEM_QUANTITY_UNAVAILABLE`, `409 PACKAGE_EXPIRED`, `409 ORDER_CANCELLED`, `400 NOT_A_PACKAGE_ITEM`, `400 INVALID_ORDER_REFERENCE` or `404 NOT_FOUND`.
+- **`POST …/clients/me/orders/{orderId}/package-bookings`** — the signed-in client books their own credit, with the API key and their access token. Same body, response and refusals as the API-key route. Another client's order is a `404` identical to a missing one. A credit `GET …/clients/me/credits` would not list is `409 CREDIT_NOT_BOOKABLE`. Booking by `slateId` or `slotIds` needs a slate planned from that credit.
+- **`quantityReturned` on `GET …/clients/me/credits`** — the sessions cancellations have returned to the credit, ever. Already counted in `quantityRemaining`; a returned session may have been booked again since.
+- **Supplier alerts on the supplier plane.** `GET …/suppliers/me/alerts`, `GET …/suppliers/me/alerts/summary`, `POST …/suppliers/me/alerts/read-all` and `POST …/suppliers/me/alerts/{alertId}/read` — the dashboard's bell, from the same inbox. A cursor from another `filter` is `400 INVALID_CURSOR`.
+- **Supplier emails can link to your portal.** When a project admin sets a supplier portal URL in the dashboard, the supplier booking emails link there, with `bookingId` when the email is about one booking.
+
+**What this means for you**
+
+- **Plan package slates for the offering the credit was sold with.** Plan from the credit itself to be sure. Handle `400 ORDER_ITEM_SERVICE_MISMATCH`.
+- **Handle `409 ORDER_CANCELLED` as final.** Don't retry; offer a new order.
+- **Keep the same `idempotencyKey` when you retry a booking,** and a fresh one for each new attempt.
+- **Don't add `quantityReturned` to `quantityRemaining`.** It is already included.
+
+Full detail: [Create a package booking → What a booking call checks](/guides/create-a-package-booking#what-a-booking-call-checks), [Create a package booking → Book the sessions left on a credit](/guides/create-a-package-booking#book-the-sessions-left-on-a-credit), [Build a booking flow → Book a client's own credit](/guides/booking-flow-auth#book-a-clients-own-credit), [Build a supplier portal → Alerts](/guides/build-a-supplier-portal#alerts), [Build a supplier portal → Links in MarketBox emails](/guides/build-a-supplier-portal#links-in-marketbox-emails), [Errors → Package credit codes](/concepts/errors#package-credit-codes).
+
+</Update>
+
 <Update label="October 21, 2026" tags={["API"]}>
 
 ## The supplier plane, site events, and API-key capabilities

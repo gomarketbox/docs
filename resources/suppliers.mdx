@@ -477,7 +477,12 @@ Three profile fields have write rules worth knowing:
 | `bio` | Optional free text. | Omit to keep, `null` to clear. |
 
 An unparseable phone or a malformed locale is a `400 VALIDATION_ERROR` — the
-row is not written. A `PUT` with `"phone": "(416) 555-0134"` reads back as
+row is not written.
+
+A `DELETE` that races a change to the supplier's sign-in, such as the supplier
+accepting an invitation at that moment, is `409 CONFLICT`, "This supplier's
+sign-in changed while it was being deleted. Try again." Nothing was deleted;
+send the `DELETE` again. A `PUT` with `"phone": "(416) 555-0134"` reads back as
 `"phone": "+14165550134"`.
 
 Schedules are **not** writable with the API key alone. A supplier created here
@@ -491,7 +496,8 @@ supplier themselves through your portal, on the
 The **supplier plane** lets a supplier who signs in to your portal act on their
 own record: their profile and photo, their bookings and attendance reports,
 cancelling and moving bookings when the service allows it, their working hours,
-blocked time and travel zones, and their demand and search insights.
+blocked time and travel zones, their demand and search insights, and their
+alerts.
 
 Every route sits under `/v1/projects/{projectId}/suppliers/me` and takes both
 the API key and the supplier's user token. The API never takes a supplier id
