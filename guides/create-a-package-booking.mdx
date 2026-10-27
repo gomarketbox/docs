@@ -647,12 +647,6 @@ Book the result with `POST /orders/{orderId}/package-bookings` and
 their own credit from your site, use the client-plane route instead. See
 [Book a client's own credit](/guides/booking-flow-auth#book-a-clients-own-credit).
 
-<Warning>
-`package-slate` takes the API key alone. It plans from any order in the
-project, so your BFF must check that the order belongs to the client it is
-planning for. The client-plane booking route checks that for you.
-</Warning>
-
 A credit that can't be planned is refused before anything is searched:
 
 | Credit | Status and `code` | `message` |
