@@ -369,7 +369,7 @@ The difference is who books: the bookings record the client as the person who
 made them.
 
 1. **Plan from the credit.** Your BFF calls `POST /availability/package-slate`
-   with the credit's `orderId` and `orderItemId`, using the API key alone. See
+   with the credit's `orderId` and `orderItemId`. See
    [Book the sessions left on a credit](/guides/create-a-package-booking#book-the-sessions-left-on-a-credit).
 2. **Book it.** Forward the client's token with
    `{ orderItemId, idempotencyKey, slateId }` to the route above.
