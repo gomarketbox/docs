@@ -75,6 +75,8 @@ sequenceDiagram
 moment the order is created, not when it's paid. The order stays `DRAFT` and
 all N sessions still book successfully — don't gate booking on Stripe. Layer
 payment on afterward with [Accept payments with Stripe](/guides/accept-payments-with-stripe).
+A `CANCELLED` order is the exception: it plans and books nothing. See
+[A cancelled order books nothing](#a-cancelled-order-books-nothing).
 </Note>
 
 <Steps>
@@ -477,10 +479,201 @@ without adjusting.
 between building the slate and booking it, this call returns `409` with
 `{ code: "SLOT_NO_LONGER_BOOKABLE", freshSuggestions }` instead of a
 booking. Rebuild the slate (or use `freshSuggestions` directly) and retry —
-don't retry the same stale `slateId` blindly.
+don't retry the same stale `slateId` blindly. `freshSuggestions` is planned
+from the order item you are booking: its remaining sessions, its offering and
+its expiry. So every slate in it can be booked on this order item. It is
+`null` when the item has nothing left to plan.
 </Note>
 </Step>
 </Steps>
+
+## What a booking call checks
+
+`POST .../package-bookings` draws down one order item. Before it writes
+anything, it checks the request against that credit.
+
+### Every session books the credit's own offering
+
+A `PACKAGE` order item funds sessions of **one** service and offering: the
+ones it was sold with. Every service line of every session must name that
+`serviceId` and `offeringId`. This applies to `slateId`, `slotIds` and
+`sessions` alike. A session that mixes the item's offering with another is
+refused whole, and nothing is booked:
+
+```json
+{
+  "code": "ORDER_ITEM_SERVICE_MISMATCH",
+  "message": "Order item oi_01kx16f0a1d8c3se02yzq4mn6q does not match the booked service/offering",
+  "statusCode": 400,
+  "requestId": "6b2e9d14-3c7a-4f85-a0d1-8e4c2b7f5a39"
+}
+```
+
+A slate planned for another offering can't be booked against this item. Plan
+the slate from the package the item was sold from, or from the credit itself
+(see [Book the sessions left on a credit](#book-the-sessions-left-on-a-credit)).
+
+<Warning>
+**Behaviour change (October 2026).** This call used to accept sessions of any
+offering and draw them from the credit. It now answers `400
+ORDER_ITEM_SERVICE_MISMATCH`, the same rule `POST /bookings` applies to
+single-session credits.
+</Warning>
+
+### Book only what remains
+
+Each service line uses one session of the credit. Asking for more sessions
+than `quantityRemaining` is refused up front, and nothing is booked:
+
+```json
+{
+  "code": "ORDER_ITEM_QUANTITY_UNAVAILABLE",
+  "message": "Requested 8 sessions but only 3 remain on the package",
+  "statusCode": 400,
+  "requestId": "2d8f4a61-7e3b-4c95-b0a2-9c1e5d7f3b48"
+}
+```
+
+The same code as a `409` means another booking used the credits after the
+check passed. Re-read `quantityRemaining` and book what is left.
+
+A session that starts after the item's `expiresAt` is `409 PACKAGE_EXPIRED`.
+With `atomicity: "all_or_nothing"` that refuses the whole call. With
+`best_effort` the session is reported in `failed[]` and the rest book.
+
+### A cancelled order books nothing
+
+When an order is cancelled, MarketBox cancels its remaining sessions and
+releases their credits. `quantityRemaining` can then look bookable, but those
+credits belong to a dead order. So a `CANCELLED` order is refused on every
+route that plans or books from it:
+
+- `POST /availability/package-slate` with its `orderId` and `orderItemId`;
+- `POST /orders/{orderId}/package-bookings`;
+- `POST /clients/me/orders/{orderId}/package-bookings`;
+- `POST /bookings` with its `orderId`;
+- `POST /holds/{reservationId}/convert` with its `orderId`, even for a hold
+  that already converted.
+
+Each of them comes back with the same envelope:
+
+```json
+{
+  "code": "ORDER_CANCELLED",
+  "message": "Order ord_01kx16f0a1c7b2sd91xzq3mn5p is CANCELLED",
+  "statusCode": 409,
+  "requestId": "8a3c6e25-1f9d-4b72-9e40-5d2b8c1a7f63"
+}
+```
+
+Don't retry. Create a new order for the client. `DRAFT`, `PENDING` and `PAID`
+orders book as before.
+
+### Retry safely with `idempotencyKey`
+
+Send a fresh `idempotencyKey` for each booking attempt, and the **same** key
+when you retry that attempt:
+
+- **A retry with the same key and the same body replays the stored `201`.**
+  This holds even when the first call used the last of the credits, and even
+  if the order was cancelled after the first call. A replay books nothing new
+  and sends no second confirmation email.
+- **The same key with a different body is `409 IDEMPOTENCY_KEY_CONFLICT`.**
+  That includes a body that would be invalid on its own, such as one naming
+  another offering.
+- **A `slateId` or `slotIds` retry must arrive within the slate's
+  `resolvableUntil` window.** After that it is refused as a stale slate, not
+  replayed. Check whether the first call succeeded by reading the order's
+  bookings.
+
+<Warning>
+**Behaviour change (October 2026).** A same-key retry after the first call
+used the last credits used to answer `400 ORDER_ITEM_QUANTITY_UNAVAILABLE`. It
+now replays the stored `201`. A reused key with a different body that is also
+invalid used to get that body's `400` or `404`. It now gets `409
+IDEMPOTENCY_KEY_CONFLICT`.
+</Warning>
+
+## Book the sessions left on a credit
+
+A client who already owns a credit may want to book what is left on it: the
+rest of a package after a cancellation returned some sessions, or a package
+bought earlier and never scheduled. Plan the slate **from the credit** instead
+of from the package. Send `orderId` and `orderItemId` in place of `packageId`:
+
+```json
+{
+  "orderId": "ord_01kx16f0a1c7b2sd91xzq3mn5p",
+  "orderItemId": "oi_01kx16f0a1d8c3se02yzq4mn6q",
+  "lat": 43.6532,
+  "lng": -79.3832,
+  "address": {
+    "addressOneLine": "100 Queen St W, Toronto, ON M5H 2N2, Canada",
+    "streetNumber": "100",
+    "streetName": "Queen St W",
+    "city": "Toronto",
+    "state": "ON",
+    "country": "CA",
+    "zipCode": "M5H 2N2"
+  },
+  "timezone": "America/Toronto",
+  "lookAheadStartDate": "2026-08-03T00:00:00-04:00",
+  "rrule": "FREQ=WEEKLY;BYDAY=MO,WE;COUNT=8"
+}
+```
+
+A credit plans differently from a package:
+
+- **It plans the sessions that remain.** The `rrule`'s `COUNT` is replaced by
+  the item's `quantityRemaining`. A package replaces it with its
+  `creditCount`.
+- **It plans the credit's own service and offering**, so the slate always
+  passes the [offering check](#every-session-books-the-credits-own-offering).
+- **The plan ends at the credit's `expiresAt`.** No slot starts at or after
+  it. When the window comes from the cadence (no `lookAheadDays` or `endDate`)
+  and you ask for no relaxation, a credit that expires before its sessions fit
+  is `422 NO_COMPLETE_SLATE`, and `reason` names the expiry. When you size the
+  window yourself, or opt in to relaxation, the window is cut at the expiry,
+  and too early an expiry gives the generic `NO_COMPLETE_SLATE`.
+- **It works after the package was edited or deleted.** The order item keeps
+  what it was sold with.
+
+Send **exactly one** source: `packageId`, or `orderId` with `orderItemId`.
+Neither, both, or `orderId` without `orderItemId` is a `400
+VALIDATION_ERROR`.
+
+Book the result with `POST /orders/{orderId}/package-bookings` and
+`{ orderItemId, slateId }`, as in Step 4. When the signed-in client books
+their own credit from your site, use the client-plane route instead. See
+[Book a client's own credit](/guides/booking-flow-auth#book-a-clients-own-credit).
+
+<Warning>
+`package-slate` takes the API key alone. It plans from any order in the
+project, so your BFF must check that the order belongs to the client it is
+planning for. The client-plane booking route checks that for you.
+</Warning>
+
+A credit that can't be planned is refused before anything is searched:
+
+| Credit | Status and `code` | `message` |
+| --- | --- | --- |
+| The order doesn't exist in this project | `400 INVALID_ORDER_REFERENCE` | `Order ord_… not found` |
+| The order is `CANCELLED` | `409 ORDER_CANCELLED` | `Order ord_… is CANCELLED` |
+| The item doesn't exist on that order | `404 NOT_FOUND` | `Order item oi_… not found` |
+| The item isn't a `PACKAGE` line | `400 NOT_A_PACKAGE_ITEM` | `Order item oi_… is not a package credit` |
+| No sessions remain | `409 ORDER_ITEM_QUANTITY_UNAVAILABLE` | `Order item oi_… has no sessions remaining` |
+| `expiresAt` has passed | `409 PACKAGE_EXPIRED` | `Order item oi_… expired at 2026-10-06T00:00:00.000Z` |
+
+An expired credit, for example, comes back as:
+
+```json
+{
+  "code": "PACKAGE_EXPIRED",
+  "message": "Order item oi_01kx16f0a1d8c3se02yzq4mn6q expired at 2026-10-06T00:00:00.000Z",
+  "statusCode": 409,
+  "requestId": "4e7a1c93-6d2f-4b58-8a05-3f9c6e2d1b74"
+}
+```
 
 ### Advanced: book explicit sessions
 
@@ -521,9 +714,10 @@ will not consume your own hold and returns `409 SLOT_HELD` naming the
 | Endpoint | Method | Auth | Description |
 | --- | --- | --- | --- |
 | `/v1/projects/{projectId}/services/{serviceId}/packages` | `GET` | `x-api-key` | List every package on the service, across all its offerings. `?status=ACTIVE` for the purchasable bundles. `200 []` when the service sells none; `404` for an unknown `serviceId`. |
-| `/v1/projects/{projectId}/availability/package-slate` | `POST` | `x-api-key` | Build an N-session slate for a package from one supplier. Returns `primarySlate.slateId`. `422` when nothing is bookable. |
+| `/v1/projects/{projectId}/availability/package-slate` | `POST` | `x-api-key` | Build an N-session slate from one supplier, for a package (`packageId`) or for what is left on a credit (`orderId` + `orderItemId`). Returns `primarySlate.slateId`. `422` when nothing is bookable. |
 | `/v1/projects/{projectId}/orders` | `POST` | `x-api-key` | Create the order and its `PACKAGE` item. Order id nested at `data.order.orderId`; item at `data.items[]`. |
 | `/v1/projects/{projectId}/orders/{orderId}/package-bookings` | `POST` | `x-api-key` | Book all N sessions of the slate atomically (or best-effort). Response is **not** wrapped in `{ data }`. |
+| `/v1/projects/{projectId}/clients/me/orders/{orderId}/package-bookings` | `POST` | `x-api-key` + `Bearer` | The same booking, made by the signed-in client on their own credit. See [Book a client's own credit](/guides/booking-flow-auth#book-a-clients-own-credit). |
 
 ### Configuration
 
@@ -551,12 +745,17 @@ will not consume your own hold and returns `409 SLOT_HELD` naming the
 | The supplier's time is already claimed by a live hold (often your own — you held, then booked directly instead of converting) | `SLOT_HELD` | `409` | `conflicts[0].reservationId` names the hold. Convert it: [Hold slots during checkout](/guides/hold-slots-for-checkout#handling-a-held-slot). |
 | The supplier's time is already claimed by a confirmed booking | `SLOT_BOOKED` | `409` | Rebuild the slate and book a different time. |
 | Heavy concurrent writes on one supplier-day exhausted the internal retry | `OCCUPANCY_CONTENTION` | `409` | Transient — retry the same request after a short backoff. |
-| Same `idempotencyKey` reused with a different request body | `IDEMPOTENCY_KEY_CONFLICT` | `409` | Generate a fresh `idempotencyKey` per distinct booking attempt; reusing the same key with the same body safely replays the original result. |
-| The package's validity window has expired | `PACKAGE_EXPIRED` | `409` | The order item's `expiresAt` has passed — no more sessions can be booked against it. |
+| Same `idempotencyKey` reused with a different request body — even one that would be invalid on its own | `IDEMPOTENCY_KEY_CONFLICT` | `409` | Generate a fresh `idempotencyKey` per distinct booking attempt; reusing the same key with the same body safely replays the original `201`, even after the credits ran out. See [Retry safely](#retry-safely-with-idempotencykey). |
+| A session starts after the order item's `expiresAt` | `PACKAGE_EXPIRED` | `409` | No session can be booked past the expiry. `all_or_nothing` refuses the whole call; `best_effort` lists the session in `failed[]`. |
+| A session names a service or offering other than the order item's | `ORDER_ITEM_SERVICE_MISMATCH` | `400` | Book the item's own offering. Plan the slate from that package or from the credit. See [Every session books the credit's own offering](#every-session-books-the-credits-own-offering). |
+| The order is `CANCELLED` | `ORDER_CANCELLED` | `409` | Its credits were released when it was cancelled. Don't retry; create a new order. Also returned by `package-slate` for a credit on that order. |
 | Requested more sessions than the order item has remaining | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | `400` | The up-front precheck rejects this. Check `quantityRemaining` before booking. |
 | A concurrent draw-down consumed the credits mid-transaction | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | `409` | A race with another booking exhausted the item after the precheck. Re-fetch `quantityRemaining` and retry with what's left. |
 | `orderItemId` isn't a `PACKAGE` item | `NOT_A_PACKAGE_ITEM` | `400` | Pass the `orderItemId` of the `PACKAGE` item from Step 3, not a `SINGLE_SESSION` item. |
 | `orderId` doesn't exist, or belongs to another project | `INVALID_ORDER_REFERENCE` | `400` | Double-check the `orderId` came from a `POST /orders` call in the same project. |
 | `orderItemId` doesn't exist on that order | `NOT_FOUND` | `404` | Re-fetch the order aggregate — you may be reusing a stale id. |
+| `package-slate` with neither `packageId` nor `orderId` + `orderItemId`, or with both | `VALIDATION_ERROR` | `400` | Send exactly one source. |
+| `package-slate` for a credit with no sessions left | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | `409` | Nothing to plan. The credit is used up. |
+| `package-slate` for a credit whose `expiresAt` has passed | `PACKAGE_EXPIRED` | `409` | Nothing can be planned on it. |
 
 See [Errors](/concepts/errors) for the full envelope and code list.

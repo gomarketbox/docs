@@ -10,7 +10,8 @@ do in the MarketBox dashboard:
 - see their bookings and file attendance reports;
 - cancel or move a booking, when the service allows it;
 - set their working hours, blocked time, travel zones and venues;
-- read their demand and search insights.
+- read their demand and search insights;
+- see and clear their alerts: new, moved and cancelled bookings.
 
 Every route lives under one base path, and none of them names a supplier:
 
@@ -83,13 +84,14 @@ The membership is read on every request. A change the business makes in the
 dashboard applies to the supplier's next call.
 
 The person must hold an `ACTIVE` membership whose roles grant the route's
-permission. A supplier holds all three permissions:
+permission. A supplier holds all four permissions:
 
 | Area | Permission |
 | --- | --- |
 | Profile and photo, hours, blocked time, travel zones, venues | `supplier:manageOwn` |
 | Bookings, attendance reports, cancel and reschedule | `booking:readOwn` |
 | Demand and search insights | `insights:readOwn` |
+| Alerts | `alert:readOwn` (every role holds it) |
 
 Everyone acts as a supplier here. A project admin or manager who also has a
 supplier record acts on **their own** record only, never on someone else's. A
@@ -484,16 +486,122 @@ routes answer:
 Search insights count only searches your site reported as drawn. See
 [Report site events](/guides/report-site-events).
 
+## Alerts
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | `/alerts/summary` | The unread count and the open conditions: what a bell badge needs. |
+| `GET` | `/alerts` | The supplier's alerts, newest first. |
+| `POST` | `/alerts/{alertId}/read` | Mark one alert read. |
+| `POST` | `/alerts/read-all` | Mark the unread alerts read, up to 1,000 per call. |
+
+These are the bell in the MarketBox dashboard: the same alerts, from the same
+inbox. Marking one read in your portal clears it in the dashboard too, and the
+reverse. The portal always reads the supplier's **own supplier inbox**. Staff
+and client alerts never appear here, whatever other roles the person holds.
+
+To build a bell:
+
+1. Poll `GET /alerts/summary` for the badge, **no more often than every 60
+   seconds**. The badge is `unreadCount` plus one for each entry in
+   `conditions`. When `unreadCapped` is `true` there are 100 or more unread:
+   show "99+". The response is `Cache-Control: no-store`.
+2. When the supplier opens the panel, call `GET /alerts?filter=unread`, or
+   `filter=all` (the default). A page holds up to `limit` alerts (1–100,
+   default 20). Follow `nextCursor` until it is `null`.
+3. When the supplier opens an alert, `POST /alerts/{alertId}/read`. It answers
+   `204`, also when the alert was already read. An id that isn't in this
+   supplier's inbox is a `404`, the same answer as an id that doesn't exist.
+4. For "Mark all as read", `POST /alerts/read-all`. It answers
+   `{ "data": { "updated": 12, "more": false } }`. Call it again while `more`
+   is `true`.
+
+A cursor is valid only for the `filter` that produced it. Any other cursor is
+refused, so start again from the first page:
+
+```json
+{
+  "code": "INVALID_CURSOR",
+  "message": "cursor is not valid for this list. Request the first page again without it.",
+  "statusCode": 400,
+  "requestId": "2a7d9c41-5e3b-4f18-b6a0-8c1e4d7f2b95"
+}
+```
+
+**Alerts hold no URL.** Each carries a `target`, which your portal maps to its
+own page. The `LESSON_` kind names are fixed identifiers; each is about a
+booking.
+
+| `kind` or condition | Suggested copy | `target` | Your page |
+| --- | --- | --- | --- |
+| `LESSON_ASSIGNED` | "New booking" | `{ "kind": "booking", "bookingId" }` | The booking's detail page |
+| `LESSON_MOVED` | "Booking moved" | `{ "kind": "booking", "bookingId" }` | The booking's detail page |
+| `LESSON_CANCELLED` | "Booking cancelled" | `{ "kind": "booking", "bookingId" }` | The booking's detail page |
+| `MY_REPORTS_OVERDUE` | "N bookings need your report" | `{ "kind": "myAppointments", "filter": "awaiting" }` | Your bookings list, filtered to those awaiting a report |
+
+The `payload` holds what the copy needs: `clientName` (shown as the service's
+participant settings allow, for example "Jordan L."), `serviceName`, and the
+booking's start as `startUtc` with its `zone`. Show the time in that zone. See
+[Times](#times).
+
+**Conditions are not alerts.** A condition such as `MY_REPORTS_OVERDUE` is
+computed on every read. It has no read state, and "Mark all as read" doesn't
+clear it. It leaves when the supplier files the reports, and its count can take
+up to 5 minutes to catch up. Alerts are kept for 90 days.
+
+## Links in MarketBox emails
+
+By default, the emails MarketBox sends to suppliers link to the MarketBox
+dashboard. When the project has a **supplier portal URL**, the supplier emails
+below link to your portal instead. A project admin sets it in the dashboard,
+under **Settings › Notifications › Supplier portal**. It can't be set through
+the API.
+
+MarketBox adds two things to the URL at send time, and nothing else:
+
+- **`bookingId`.** When an email is about exactly one booking for the supplier
+  receiving it, it is added as a query parameter. A URL that already has a
+  query string keeps it. An email about several bookings, or a day's agenda,
+  gets no `bookingId`: link that to the schedule.
+- **`{supplierLocale}`** is replaced with the supplier's locale: their
+  `defaultLocale`, else their first `locales` entry, else the project's
+  `defaultLocale`, else `en-CA`.
+
+No project id, supplier id, email address or token is added. The link is only
+a pointer: your portal signs the supplier in and calls the supplier plane.
+
+The URL must be `https` (`http` only for `localhost` and `127.0.0.1`), at most
+2,048 characters, with no `#` fragment, no username or password, and no token
+other than `{supplierLocale}`.
+
+For example, take a portal URL ending in `/{supplierLocale}/schedule` and a
+supplier whose locale is `fr-CA`. An email about one booking links to the URL
+ending in `/fr-CA/schedule?bookingId=bk_01kx16f2a0e5x9jv6r0c1qs7pm`.
+
+| Email | With a portal URL |
+| --- | --- |
+| New booking | Your portal; `bookingId` when the email covers exactly one booking. |
+| Booking updated, to the current supplier | Your portal, with `bookingId`. |
+| Booking updated, to the previously assigned supplier | Your portal, without `bookingId`. |
+| Booking cancelled, to the supplier | Your portal, with `bookingId`. |
+| Booking cancelled, to the previously assigned supplier | Your portal, without `bookingId`. |
+| Order cancelled, to the supplier | Your portal; `bookingId` when the email covers exactly one booking. |
+| Daily agenda | Your portal. |
+| Rate your client, and its follow-ups | Unchanged: the project's review URL, or MarketBox's review page. |
+| Invitation | Unchanged: the dashboard. |
+
+A supplier taken off a booking gets no `bookingId`, because the plane returns a
+booking only to its current supplier. Client emails and staff copies are
+unchanged. See [Emails](/concepts/emails#links-in-supplier-emails).
+
 ## Not on the supplier plane yet
 
 These dashboard features have no supplier-plane route yet. Suppliers use the
 dashboard for them:
 
-- **Alerts** — the in-app notifications a supplier sees.
 - **Google Calendar** — connecting a supplier's calendar.
-- **Invitations** — inviting a supplier into the project.
-- **Portal links** — MarketBox emails and pages linking back to your portal
-  instead of the dashboard.
+- **Invitations** — inviting a supplier into the project. A supplier accepts
+  once in the dashboard, then signs in to your portal with the same account.
 
 ## Reference
 
@@ -523,6 +631,10 @@ token.
 | `/v1/projects/{projectId}/suppliers/me/demand` | `GET` |
 | `/v1/projects/{projectId}/suppliers/me/demand/suggestions/{key}/dismiss` | `POST`, `DELETE` |
 | `/v1/projects/{projectId}/suppliers/me/search-insights` | `GET` |
+| `/v1/projects/{projectId}/suppliers/me/alerts` | `GET` |
+| `/v1/projects/{projectId}/suppliers/me/alerts/summary` | `GET` |
+| `/v1/projects/{projectId}/suppliers/me/alerts/read-all` | `POST` |
+| `/v1/projects/{projectId}/suppliers/me/alerts/{alertId}/read` | `POST` |
 
 Key-only routes the portal also uses, with the API key alone:
 

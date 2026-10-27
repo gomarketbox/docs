@@ -5,8 +5,8 @@ description: Wire end-user sign-in into a custom booking flow that calls the Mar
 
 This guide walks you through building a custom booking flow that signs users in
 and calls the MarketBox API on their behalf. It covers both auth planes, the
-backend-for-frontend (BFF) pattern, client onboarding, and reading a user's
-package credits.
+backend-for-frontend (BFF) pattern, client onboarding, reading a user's
+package credits, and letting them book their own credit.
 
 If you haven't yet, read [End-user authentication](/concepts/end-user-authentication)
 first — it explains the two-plane model this guide builds on.
@@ -319,7 +319,99 @@ const { data } = await res.json();
 // data is an array of credit items; an empty array is normal before any purchase
 ```
 
-The BFF calls `GET /v1/projects/{projectId}/clients/me/credits`.
+The BFF calls `GET /v1/projects/{projectId}/clients/me/credits`. Each entry is
+a `PACKAGE` order item the client owns:
+
+```json
+{
+  "data": [
+    {
+      "orderId": "ord_01kx16f0a1c7b2sd91xzq3mn5p",
+      "orderItemId": "oi_01kx16f0a1d8c3se02yzq4mn6q",
+      "packageId": "pkg_01kvr4cgb3esg8hxx32kwhre7g",
+      "serviceId": "srv_01kv60qg12e82acr78edfnjhvv",
+      "offeringId": "off_01kv60qge5eh59ap0gw0pqrrys",
+      "quantity": 8,
+      "quantityAllocated": 5,
+      "quantityRemaining": 3,
+      "quantityReturned": 1,
+      "expiresAt": "2026-12-06T00:00:00.000Z",
+      "orderStatus": "PAID"
+    }
+  ]
+}
+```
+
+- **`quantityRemaining`** is the live balance: the sessions the client can
+  still book.
+- **`quantityReturned`** counts the sessions cancellations have returned to
+  this credit, ever. They are already counted in `quantityRemaining`, so don't
+  add them. A returned session may have been booked again since. Use it to say
+  "1 session was returned to your package", not to work out a balance.
+
+Only credits on `PAID` orders are listed. A credit that is used up, has
+expired or was removed is left out. Pass `includeExpired=true` to keep the
+expired ones.
+
+## Book a client's own credit
+
+The signed-in client can book sessions from their own credit:
+
+```
+POST /v1/projects/{projectId}/clients/me/orders/{orderId}/package-bookings
+```
+
+It takes the same two credentials as the other `/clients/me` routes. The body,
+the `201` response and the refusals are the same as the API-key route,
+`POST /orders/{orderId}/package-bookings`. See
+[Create a package booking](/guides/create-a-package-booking#what-a-booking-call-checks).
+The difference is who books: the bookings record the client as the person who
+made them.
+
+1. **Plan from the credit.** Your BFF calls `POST /availability/package-slate`
+   with the credit's `orderId` and `orderItemId`, using the API key alone. See
+   [Book the sessions left on a credit](/guides/create-a-package-booking#book-the-sessions-left-on-a-credit).
+2. **Book it.** Forward the client's token with
+   `{ orderItemId, idempotencyKey, slateId }` to the route above.
+
+This route adds three refusals of its own:
+
+- **Another client's order is a `404`.** It is the same body as an order that
+  doesn't exist, so an id can't be used to probe someone else's order:
+
+  ```json
+  {
+    "code": "NOT_FOUND",
+    "message": "Order ord_01kx16f0a1c7b2sd91xzq3mn5p not found",
+    "statusCode": 404,
+    "requestId": "7f2b5d38-9a1e-4c64-b8d3-1e6a4c9f2b57"
+  }
+  ```
+
+- **Only a credit that `GET /clients/me/credits` would list can be booked.**
+  Any other is `409 CREDIT_NOT_BOOKABLE`: an order that isn't `PAID`, a credit
+  that is used up or has expired, a removed line, or a line that isn't a
+  package.
+
+  ```json
+  {
+    "code": "CREDIT_NOT_BOOKABLE",
+    "message": "This credit is not available to book",
+    "statusCode": 409,
+    "requestId": "3c9a7e14-2b6d-4f80-a5c1-6d8e2f4b9a73"
+  }
+  ```
+
+  A `CANCELLED` order gets `409 ORDER_CANCELLED` instead, as on the API-key
+  route.
+
+- **A `slateId` or `slotIds` must come from a slate planned from this
+  credit**, with this `orderId` and `orderItemId`. A slate planned from a
+  `packageId`, or from another credit, is a `404` with the same body as an
+  unknown id. Explicit `sessions` need no slate.
+
+A retry with the same `idempotencyKey` replays the first result, on either
+route. See [Retry safely](/guides/create-a-package-booking#retry-safely-with-idempotencykey).
 
 ## Reference
 
@@ -344,7 +436,9 @@ They are per-environment, not per-application.
 | --- | --- | --- | --- |
 | `/v1/projects/{projectId}/clients/me` | `POST` | `x-api-key` + `Bearer` | Onboard the signed-in client, optionally with `firstName`, `lastName` and `phone`. `201` first call, `200` if already onboarded. |
 | `/v1/projects/{projectId}/clients/me` | `PATCH` | `x-api-key` + `Bearer` | Change the signed-in client's name or phone. |
-| `/v1/projects/{projectId}/clients/me/credits` | `GET` | `x-api-key` + `Bearer` | The client's remaining package credits. |
+| `/v1/projects/{projectId}/clients/me/credits` | `GET` | `x-api-key` + `Bearer` | The client's remaining package credits, with `quantityReturned`. |
+| `/v1/projects/{projectId}/availability/package-slate` | `POST` | `x-api-key` | Plan the sessions left on a credit (`orderId` + `orderItemId`). |
+| `/v1/projects/{projectId}/clients/me/orders/{orderId}/package-bookings` | `POST` | `x-api-key` + `Bearer` | Book sessions from the signed-in client's own credit. |
 
 ### Error and status cases
 
@@ -355,6 +449,10 @@ They are per-environment, not per-application.
 | Valid token but the user isn't a client of the project yet | `403 FORBIDDEN`, "No active membership on this project" | Call onboarding (`POST .../clients/me`) for the signed-in user before other end-user routes. |
 | The business removed the client's access | `403 MEMBERSHIP_INACTIVE` on onboarding; `403 FORBIDDEN` on the other `/clients/me` routes | The client asks the business to invite them again. |
 | The API key lacks Standard API access | `403 CAPABILITY_NOT_GRANTED` | A project admin ticks **Standard API access** on the Application. |
+| Booking an order that doesn't exist or belongs to another client | `404 NOT_FOUND` | Book only credits from `GET .../clients/me/credits`. |
+| Booking a credit the credits read would not list (unpaid, used up, expired, removed) | `409 CREDIT_NOT_BOOKABLE` | Re-read the credits and offer only those listed. |
+| Booking from a cancelled order | `409 ORDER_CANCELLED` | Don't retry. The credits were released when the order was cancelled. |
+| Booking by a `slateId` or `slotIds` not planned from this credit | `404 NOT_FOUND` | Plan the slate with this `orderId` and `orderItemId`. |
 | The API key's project scope doesn't include the requested project | `403` | The Application is scoped to a different project. Create an Application scoped to the correct project, or use a wildcard-scoped key if permitted. See [Projects and scope](/concepts/projects-and-scope). |
 
 ### Security checklist
