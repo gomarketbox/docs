@@ -308,7 +308,8 @@ POST /v1/projects/{projectId}/availability/package-slate
 Builds a **slate** — a complete N-session plan for a package, from a single
 supplier's availability. Pass a `packageId` (the session count, service and
 offering are derived from it) — or, to plan what is left on a credit the
-client already owns, its `orderId` and `orderItemId` — plus a location, an IANA `timezone`, a
+client already owns, its `orderId` and `orderItemId`, optionally with the `clientId` the order must
+belong to — plus a location, an IANA `timezone`, a
 `lookAheadStartDate` carrying a numeric offset, and an `rrule` with a bounded
 `COUNT`. The returned `primarySlate.slateId` books the whole plan in one call
 via `POST /v1/projects/{projectId}/orders/{orderId}/package-bookings`.

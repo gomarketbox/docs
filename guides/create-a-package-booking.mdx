@@ -642,22 +642,23 @@ Send **exactly one** source: `packageId`, or `orderId` with `orderItemId`.
 Neither, both, or `orderId` without `orderItemId` is a `400
 VALIDATION_ERROR`.
 
+To have MarketBox confirm the credit is the client's, add their `clientId`
+beside `orderId` and `orderItemId`. An order that belongs to another client is
+then refused exactly like an order that doesn't exist: `400
+INVALID_ORDER_REFERENCE`, and nothing is planned. Without `clientId`, the order
+is not checked against a client. `clientId` beside `packageId` is a `400
+VALIDATION_ERROR`.
+
 Book the result with `POST /orders/{orderId}/package-bookings` and
 `{ orderItemId, slateId }`, as in Step 4. When the signed-in client books
 their own credit from your site, use the client-plane route instead. See
 [Book a client's own credit](/guides/booking-flow-auth#book-a-clients-own-credit).
 
-<Warning>
-`package-slate` takes the API key alone. It plans from any order in the
-project, so your BFF must check that the order belongs to the client it is
-planning for. The client-plane booking route checks that for you.
-</Warning>
-
 A credit that can't be planned is refused before anything is searched:
 
 | Credit | Status and `code` | `message` |
 | --- | --- | --- |
-| The order doesn't exist in this project | `400 INVALID_ORDER_REFERENCE` | `Order ord_… not found` |
+| The order doesn't exist in this project, or belongs to another client than `clientId` | `400 INVALID_ORDER_REFERENCE` | `Order ord_… not found` |
 | The order is `CANCELLED` | `409 ORDER_CANCELLED` | `Order ord_… is CANCELLED` |
 | The item doesn't exist on that order | `404 NOT_FOUND` | `Order item oi_… not found` |
 | The item isn't a `PACKAGE` line | `400 NOT_A_PACKAGE_ITEM` | `Order item oi_… is not a package credit` |
