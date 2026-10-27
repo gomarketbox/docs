@@ -37,6 +37,7 @@ const ALWAYS_ALLOWED = new Set([
   // Added beyond the brief's seed list after grepping the real docs:
   'localhost', // CONTRIBUTING.md / README.md local-dev instructions ("mint dev")
   'mintlify.com', // README.md — the docs framework this site is built on
+  'marketboxinc.mintlify.app', // README.md — where Mintlify deploys main; docs.gomarketbox.com isn't pointed at it yet
   'bitbucket.org', // README.md — link to the mb-core source repo
   'mb-core.vercel.app', // dev dashboard — production app.gomarketbox.com isn't live yet
   'example.com', // RFC 2606 reserved placeholder host, used for made-up example values
