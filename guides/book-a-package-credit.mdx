@@ -72,9 +72,11 @@ sequenceDiagram
 <Note>
 **Only paid credits can be booked here.** `GET /clients/me/credits` lists a
 credit only when its order is `PAID`, and the booking call refuses any credit
-that list would leave out. That is stricter than the API-key route, which also
-books from `DRAFT` and `PENDING` orders. A client who hasn't paid yet should
-finish checkout first. See [Accept payments with Stripe](/guides/accept-payments-with-stripe).
+that list would leave out. That is the rule for every client flow: a client
+books their own credits only once the order is `PAID`. The API-key route
+also books from `DRAFT` and `PENDING` orders, so if your server books
+credits with the key alone, check the order's `status` first. A client who
+hasn't paid yet should finish checkout first. See [Accept payments with Stripe](/guides/accept-payments-with-stripe).
 </Note>
 
 <Steps>

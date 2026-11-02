@@ -10,8 +10,11 @@ service offerings, with optional notes and participants.
 ## The booking lifecycle
 
 A booking is created as `SCHEDULED` and settles into one of the four outcomes
-on the bottom row. `AWAITING_CONFIRMATION` and `DISPUTED` are where the
-platform decides what happened after the session ended.
+on the bottom row. After the session ends, it waits in
+`AWAITING_CONFIRMATION` until someone settles it. Nothing moves a booking to
+`COMPLETED` on its own: no timer or confirmation window completes it. If
+your suppliers don't file attendance reports, set `COMPLETED` yourself once
+the booking reads `AWAITING_CONFIRMATION`, or it stays there.
 
 ```
 SCHEDULED ──► STARTED ──► AWAITING_CONFIRMATION ──► DISPUTED
@@ -34,9 +37,9 @@ straight to `AWAITING_CONFIRMATION`.
 | --- | --- | --- |
 | `SCHEDULED` | Created, not yet started. The only start state. | Booking creation. Nothing transitions *into* it. |
 | `STARTED` | The session is under way. | Your key, once `bookingStartUtc` has passed. The supplier plane has no route that sets it. |
-| `AWAITING_CONFIRMATION` | The session has ended and MarketBox is waiting on the two parties' attendance reports. | The platform, when `bookingEndUtc` passes. An operator can also reverse a settled booking back here within a window. |
+| `AWAITING_CONFIRMATION` | The session has ended and the booking is waiting to be settled. It stays here until the supplier reports attendance, or your key or an operator sets an outcome. | The platform, when `bookingEndUtc` passes. An operator can also reverse a settled booking back here within a window. |
 | `DISPUTED` | The client and supplier reported different things about attendance. | The platform only. Resolved by an operator in the MarketBox console. |
-| `COMPLETED` | Delivered. | The platform (both attended, or the confirmation window timed out), the supplier's own report that they attended, or your key. |
+| `COMPLETED` | Delivered. | The supplier's own report that they attended, or your key. Nothing completes a booking automatically. |
 | `CLIENT_NO_SHOW` | The client did not attend. | Your key, after a grace period past the start. No attendance report sets it: a report says only whether its own side attended. |
 | `SUPPLIER_NO_SHOW` | The supplier did not attend. | The supplier's own report that they did not attend, or your key after the same grace period. |
 | `CANCELLED` | Called off. **Hard-terminal**: money may have moved, so nothing leaves this state. | The supplier, through the [supplier plane](/guides/build-a-supplier-portal), only while the booking is `SCHEDULED` and before `bookingEndUtc`. Your key, also from `STARTED` (before `bookingEndUtc`) and from `AWAITING_CONFIRMATION`. An operator, also from `DISPUTED`. |

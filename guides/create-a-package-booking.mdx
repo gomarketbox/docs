@@ -72,11 +72,15 @@ sequenceDiagram
 ```
 
 <Note>
-**Payment is not required.** Just like single bookings, credits exist the
-moment the order is created, not when it's paid. The order stays `DRAFT` and
-all N sessions still book successfully — don't gate booking on Stripe. Layer
-payment on afterward with [Accept payments with Stripe](/guides/accept-payments-with-stripe).
-A `CANCELLED` order is the exception: it plans and books nothing. See
+**The API doesn't require payment, but a client flow must.** Credits exist
+the moment the order is created, not when it's paid, so this route books all
+N sessions from a `DRAFT` order. That suits a business booking on a client's
+behalf. When the client books their own package credits, book only from an
+order whose `status` reads `PAID`. Check it yourself before calling this
+route, because it won't refuse an unpaid order. Or use the
+[client-plane route](/guides/book-a-package-credit), which refuses unpaid
+credits for you. Single bookings don't need a `PAID` order in either flow.
+A `CANCELLED` order books nothing. See
 [A cancelled order books nothing](#a-cancelled-order-books-nothing).
 </Note>
 

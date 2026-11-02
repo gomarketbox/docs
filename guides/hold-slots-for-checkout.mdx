@@ -64,9 +64,11 @@ A checkout with a hold is three calls, always in this order:
    (the only proof the charge went through), or as soon as the client's
    `stripe.confirmPayment` resolves, if the hold may expire before `PAID`
    lands. The second books before payment is confirmed, so keep polling
-   and reconcile any order that never reaches `PAID`. Convert is
-   idempotent on the `reservationId`, so a retry replays the same bookings
-   instead of double-booking.
+   and reconcile any order that never reaches `PAID`. A package hold in a
+   client flow is the exception: convert it only after the order reads
+   `PAID`, because a client's package credits book only once paid. Convert
+   is idempotent on the `reservationId`, so a retry replays the same
+   bookings instead of double-booking.
 
 If the client abandons, `POST /holds/{reservationId}/release` frees the
 time immediately.
@@ -489,7 +491,7 @@ again and convert the new reservation; if someone took it, you'll see
 <Warning>
 **A charged card plus `HOLD_EXPIRED` leaves money with no booking.** The
 public API has no refund endpoint, so if the time is gone the business has
-to refund the charge in its own Stripe dashboard. Avoid getting there:
+to refund the payment from the MarketBox dashboard. Avoid getting there:
 choose a `holdDurationMins` long enough to cover a 3-D Secure challenge,
 and keep the heartbeat (Step 3) running until convert returns — not just
 until the client clicks **Pay**.
@@ -732,7 +734,7 @@ except `OCCUPANCY_CONTENTION` is worth retrying unchanged.
 | `409` | `HOLD_EXPIRED` | You converted after `heldUntil`. Expiry is lazy — the hold simply stopped blocking. | Hold again and convert the new `reservationId`. If someone took the time meanwhile you'll get `SLOT_BOOKED` instead. |
 | `409` | `RESERVATION_NOT_FOUND` / `RESERVATION_NOT_HELD` | Unknown `reservationId`, or one that was released. | Terminal — start a fresh hold. (An already-`CONVERTED` reservation is **not** an error: it replays its stored result. That's what makes a retry safe — unless the order has since been cancelled, which is `ORDER_CANCELLED`.) |
 | `409` | `RESERVATION_FORBIDDEN` | `heldBy` doesn't match the hold's owner. | Send the same `heldBy` you held with. |
-| `409` | `SLOT_HELD` / `SLOT_BOOKED` | Someone else claimed the time while your client was paying (only possible after your hold lapsed). | The time is gone. Offer the client a fresh slot and convert a new hold against the same order item. The public API has no refund endpoint: if the client wants their money back, the business refunds the charge in Stripe. |
+| `409` | `SLOT_HELD` / `SLOT_BOOKED` | Someone else claimed the time while your client was paying (only possible after your hold lapsed). | The time is gone. Offer the client a fresh slot and convert a new hold against the same order item. The public API has no refund endpoint: if the client wants their money back, the business refunds the payment from the MarketBox dashboard. |
 | `409` | `OCCUPANCY_CONTENTION` | Row contention on the supplier's day. | **Retryable** — convert is idempotent, so resending is safe. |
 | `422` | `PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC` | More than 15 sessions with `atomicity: "all_or_nothing"`. | Use `atomicity: "best_effort"` (needs `suggestionConfig.allowPartialPackages`) or hold a smaller slate. |
 
