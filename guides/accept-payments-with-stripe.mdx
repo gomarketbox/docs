@@ -34,8 +34,9 @@ nothing as paid yourself; you wait for MarketBox to. Asking
 your poll sees `PAID`. Convert doesn't check payment, so you can convert
 as soon as `stripe.confirmPayment` resolves instead, but that books before
 the charge is confirmed: keep polling and reconcile any order that never
-reaches `PAID`. Convert is idempotent per `reservationId`, so a retry is
-safe. See
+reaches `PAID`. Don't do that for a package hold in a client flow: a
+client's package credits book only once the order is `PAID`. Convert is
+idempotent per `reservationId`, so a retry is safe. See
 [Hold slots during checkout](/guides/hold-slots-for-checkout).
 </Note>
 

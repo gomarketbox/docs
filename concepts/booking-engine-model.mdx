@@ -170,9 +170,20 @@ order is the one exception: its credits were released when it was cancelled,
 so it plans and books nothing (`409 ORDER_CANCELLED`).
 
 Payment — via Stripe or a manual transaction — settles the order. It moves
-money and updates the order's status and paid amount. It does **not** gate
-whether a booking can be created. Don't build a flow that blocks booking
-until Stripe confirms; the two are independent.
+money and updates the order's status and paid amount. The API-key booking
+routes don't check it.
+
+What your flow should require depends on what is being booked:
+
+- **Single bookings:** don't require payment. Book against a `DRAFT` order
+  and settle it afterward, in a client flow too.
+- **Package credits in a client flow:** require it. A client books their
+  own credits only once the order's `status` reads `PAID`. The client plane
+  ([Book a client's package credit](/guides/book-a-package-credit)) enforces
+  this for you. If your server books credits with the API key alone, check
+  the order's `status` first, because the key routes won't.
+- **A business booking on a client's behalf:** may book package credits
+  from an unpaid order.
 
 <Note>
 This also means you can build the entire scheduling half of your
