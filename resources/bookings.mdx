@@ -33,7 +33,7 @@ straight to `AWAITING_CONFIRMATION`.
 | Status | Meaning | Who puts a booking here |
 | --- | --- | --- |
 | `SCHEDULED` | Created, not yet started. The only start state. | Booking creation. Nothing transitions *into* it. |
-| `STARTED` | The session is under way. | Your key, or the supplier, once `bookingStartUtc` has passed. |
+| `STARTED` | The session is under way. | Your key, once `bookingStartUtc` has passed. The supplier plane has no route that sets it. |
 | `AWAITING_CONFIRMATION` | The session has ended and MarketBox is waiting on the two parties' attendance reports. | The platform, when `bookingEndUtc` passes. An operator can also reverse a settled booking back here within a window. |
 | `DISPUTED` | The client and supplier reported different things about attendance. | The platform only. Resolved by an operator in the MarketBox console. |
 | `COMPLETED` | Delivered. | The platform (both attended, or the confirmation window timed out), the supplier's own report that they attended, or your key. |
