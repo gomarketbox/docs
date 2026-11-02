@@ -28,6 +28,14 @@ Every error response from the MarketBox API uses the same envelope.
   MarketBox support uses to look up a single call in our logs.
 </Tip>
 
+To correlate a call with your own logs, send your own id in an
+`X-Request-Id` request header. If it is 128 characters or fewer, the API
+uses it as the request's id: it comes back in the `X-Request-Id` response
+header and as `requestId` in any error body. A longer value is ignored, and
+the API generates a UUID instead. A request refused at the edge, before it
+reaches the API (see [Authentication](/concepts/authentication#when-the-key-is-missing-or-wrong)),
+carries the gateway's own id instead.
+
 ### Conflict bodies carry extra fields
 
 Supplier-time conflicts and hold-lifecycle failures use the same four envelope
@@ -45,7 +53,6 @@ route) adds `conflicts[]` and `hint`:
   "conflicts": [
     {
       "claimType": "HOLD",
-      "supplierId": "sup_01kv60qgnef2kt3pvqgwmkbzfr",
       "startUtc": "2026-07-15T14:00:00.000Z",
       "endUtc": "2026-07-15T15:00:00.000Z",
       "reservationId": "resv_01kv8p20m1gnqvxl92xln6awk8",
@@ -91,7 +98,7 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 
 | `code`                                  | Status | Notes                                                                                   |
 | --------------------------------------- | ------ | --------------------------------------------------------------------------------------- |
-| `VALIDATION_ERROR`                      | 400    | Request body or query failed schema validation. `message` names the field.              |
+| `VALIDATION_ERROR`                      | 400    | Request body or query failed schema validation. `message` names every failing field. See [Validation errors](#validation-errors). |
 | `BAD_REQUEST`                           | 400    | Generic client-input failure covering several situations: an illegal status transition (e.g. nothing leaves `CANCELLED`; the `message` names the booking's current status), a mismatched currency between an order and an item you're adding to it, an offering that isn't `ACTIVE`, an unparseable pagination `cursor` (except on the supplier's alerts list, which answers `INVALID_CURSOR`), and other malformed input. `message` names the specific problem. |
 | `HTTP_ERROR`                            | 400, 401 | A request refused before its route ran. `401` on an end-user route: a missing or malformed `Authorization` header, or a user token that is invalid or expired — sign in again. `400`: a body that isn't valid JSON. |
 | `UNAUTHORIZED`                          | 401    | On an end-user route, a user token that names no user — and, once enforced, a token issued to another client. See [End-user authentication](/concepts/end-user-authentication#where-the-user-token-comes-from). A missing or unrecognised **API key** is `FORBIDDEN`. |
@@ -102,6 +109,9 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | `FIELD_NOT_SELF_EDITABLE`               | 403    | `PATCH .../suppliers/me` named a field only the business may change (`active`, `email`, `externalId`, `externalData`, `maxTravelTime`, `defaultLocale`). The whole body was refused. See [Build a supplier portal](/guides/build-a-supplier-portal#edit-the-profile). |
 | `INSIGHTS_DISABLED`                     | 403    | The project has switched off this supplier insight (demand, or search). Hide the insight in your portal. |
 | `NOT_FOUND`                             | 404    | Resource doesn't exist or has been soft-deleted. Also returned for a `clientId` or `supplierId` in the request body that belongs to a different project — never a `403`, so a foreign id is indistinguishable from a missing one. |
+| `UNRESOLVED_SUBDIVISION`                | 400    | The address `state` isn't a recognised ISO 3166-2 subdivision of its country, and the offering or package prices by state or postal code there. `message` names the value and the subdivisions configured. Send the ISO code. See [Regional pricing](/concepts/regional-pricing#country-and-state-codes). |
+| `INVALID_ORDER_ITEM_REFERENCE`          | 400    | `POST .../bookings`: the service line's `orderItemId` isn't an item of its `orderId`. Check both ids. |
+| `REVIEW_ALREADY_EXISTS`                 | 409    | `POST .../bookings/{bookingId}/reviews`: the booking already has a review in that direction. Don't retry. |
 | `INVALID_CURSOR`                        | 400    | `GET .../suppliers/me/alerts` only: the `cursor` isn't one this list issued, or came from another `filter`. Request the first page again without it. See [Build a supplier portal](/guides/build-a-supplier-portal#alerts). |
 | `VERSION_CONFLICT`                      | 409    | Concurrent modification — re-read the resource and try again.                           |
 | `CONFLICT`                              | 409    | Generic write conflict covering situations like a booking that's already at capacity, or a client that's already registered as a participant on it. Also `DELETE .../suppliers/{supplierId}` when the supplier's sign-in changed during the delete — try again. `message` names the specific problem. |
@@ -117,6 +127,7 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | `PAYLOAD_TOO_LARGE`                     | 413    | A site-events batch over 256 KB, or a beacon over 50 events or 64 KB. Nothing was read. Send fewer events per request. |
 | `RATE_LIMITED`                          | 429    | More than about 50 site-events requests a second from this key (bursts of 100). Retry the same batch after `Retry-After`. |
 | `SERVICE_UNAVAILABLE`                   | 503    | MarketBox couldn't check or record a site-events batch. Nothing was recorded. Retry the same batch after `Retry-After`. |
+| `INTERNAL_ERROR`                        | 500    | An unexpected failure on our side. `message` is always "An unexpected error occurred". Quote the `requestId` to support. See [Retry guidance](#retry-guidance). |
 
 The exact list of codes is also captured in
 [`/v1/openapi.json`](/api-reference/introduction). New codes may be added
@@ -145,6 +156,11 @@ and the slate-based booking routes. Full walkthrough in
 | `SUGGESTION_EXPIRED`         | 409    | The underlying suggestion aged out before you booked it.                                                    | Re-run availability.                                                                                    |
 | `SLOT_NOT_BOOKABLE`          | 409    | The slot resolved but can no longer be booked.                                                              | Re-run availability.                                                                                    |
 | `LOCATION_UNRESOLVABLE`      | 409    | No supplier travel zone covers the requested coordinates.                                                   | The supplier doesn't serve that address. Pick another supplier or location.                             |
+| `SLOT_NO_LONGER_BOOKABLE`    | 409    | `POST .../package-bookings` by `slateId` or `slotIds`: the slate went stale before you booked it. The body adds `freshSuggestions`, re-planned for the same credit. | Show `freshSuggestions` and book from them. Nothing was booked. |
+| `NO_COMPLETE_SLATE`          | 422    | `POST /availability/package-slate`: no plan fills the package, and there is no partial slate or alternative cadence to offer. `message` gives the reason. | Change the `rrule`, the dates or the location, and plan again. |
+| `NO_AVAILABILITY`            | 422    | `POST /availability/package-slate`: no supplier has any availability for the request. | Try another location or date range. |
+| `SLOT_TIME_UNAVAILABLE`      | 409    | `POST /suggestions/slots/{slotId}/reschedule`: the supplier doesn't work then, or the time overlaps a booking or blocked time. | Pick another time. The slate is unchanged. |
+| `SLOT_NO_LONGER_FREE`        | 409    | `POST /suggestions/slots/{slotId}/reschedule`: a concurrent hold took the slot while you moved it. | Retry once at a different time. |
 
 <Warning>
   A `404 NOT_FOUND` with the message **`Location stz_… not found`** on convert
@@ -172,6 +188,8 @@ These come from the routes that plan or book from an order's credits:
 | `NOT_A_PACKAGE_ITEM`              | 400    | The `orderItemId` isn't a `PACKAGE` line. | Pass the order's `PACKAGE` item. |
 | `IDEMPOTENCY_KEY_CONFLICT`        | 409    | The `idempotencyKey` was already used with a different body. | Use a fresh key for each new attempt. The same key with the same body replays the first `201`. |
 | `ORDER_CANCELLED`                 | 409    | The order is `CANCELLED`. Its sessions were cancelled and its credits released. Also refused when converting a hold that already converted. | Don't retry. Create a new order. |
+| `PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC` | 422 | `atomicity: "all_or_nothing"` (the default) books at most 15 sessions in one call. Nothing was booked. | Book fewer sessions per call (for example with `slotIds`), or send `atomicity: "best_effort"` if your project allows it. |
+| `BEST_EFFORT_NOT_ENABLED`         | 422    | You sent `atomicity: "best_effort"`, and your project doesn't allow partial package booking. Nothing was booked. | Use the default `all_or_nothing`, in calls of 15 sessions or fewer. |
 | `CREDIT_NOT_BOOKABLE`             | 409    | `POST /clients/me/orders/{orderId}/package-bookings` only: the credit isn't one `GET /clients/me/credits` would list — the order isn't `PAID`, or the credit is used up, expired or removed. | Re-read the client's credits and offer only those listed. See [Build a booking flow](/guides/booking-flow-auth#book-a-clients-own-credit). |
 
 A cancelled order comes back as:
@@ -205,20 +223,35 @@ attendance report. Full walkthrough in
 
 ## Validation errors
 
-For schema validation failures, `message` names the offending field:
+A request that fails schema validation is a `400 VALIDATION_ERROR`. The
+`message` lists **every** failing field, not just the first. Each issue is
+the dot-joined field path, a colon and the reason, and issues are separated
+by `; `:
 
 ```json
 {
   "code": "VALIDATION_ERROR",
-  "message": "bookingEndUtc must be strictly after bookingStartUtc",
+  "message": "sessions.0.latitude: latitude and longitude are required for TRAVEL_ZONE; sessions.0.address: address is required for TRAVEL_ZONE",
   "statusCode": 400,
   "requestId": "7c3f0a5d-9b2e-4a68-9d14-5f8c2b6e0a91"
 }
 ```
 
-We do **not** return a nested errors array — one error per response. If
-multiple fields are wrong, you'll fix the first, retry, and surface the
-next.
+There is no nested errors array and no separate `path` field — the paths
+are inside `message`. To show each problem separately, split `message` on
+`; `, then split each part on its first `: `.
+
+A rule the route checks after the schema passes is a `400 BAD_REQUEST`
+instead, with one problem per response:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "bookingEndUtc must be strictly after bookingStartUtc",
+  "statusCode": 400,
+  "requestId": "e2a7c9b4-1f6d-4083-9c5e-8b3a0d7f2e16"
+}
+```
 
 ## Retry guidance
 

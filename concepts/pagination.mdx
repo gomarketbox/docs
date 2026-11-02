@@ -14,14 +14,29 @@ lists — bookings in a window, schedules, blocked times, travel zones and
 venues ([Build a supplier portal](/guides/build-a-supplier-portal)). Each
 endpoint's reference says which kind it is.
 
+The catalog lists — `GET .../services` and, under a service, its offerings,
+packages and business models — also return everything in one response. They take no `limit` or `cursor`, but their body still
+carries `nextCursor`, and it is always `null`. Code that follows the
+loop below works unchanged on them.
+
 ## Query parameters
 
 | Parameter | Type    | Default | Notes                                                          |
 | --------- | ------- | ------- | -------------------------------------------------------------- |
-| `limit`   | integer | `50`    | Max items per page. Maximum `200`. Requests above `200` → 400. |
+| `limit`   | integer | `50`    | Max items per page, `1`–`200` on most lists. Out of range → 400. |
 | `cursor`  | string  | —       | Opaque token returned from the previous page.                  |
 
 Both are optional. Omitting `cursor` returns the first page.
+
+Two lists use smaller limits:
+
+| List | `limit` range | Default |
+| --- | --- | --- |
+| `GET .../suppliers/me/alerts` | `1`–`100` | `20` |
+| `POST .../availability/suppliers` (`limit` and `cursor` go in the body) | `1`–`50` | `20` |
+
+A page can hold fewer than `limit` items even when more remain. Never stop
+on a short page — only `nextCursor: null` means the end.
 
 ## Response shape
 
@@ -87,6 +102,11 @@ done
 
 ## Errors
 
-- `400 Bad Request` — `limit` is non-numeric, less than 1, or above 200.
-- `400 Bad Request` — `cursor` is malformed (e.g. not valid base64, or
-  doesn't match the endpoint that issued it).
+- `400 VALIDATION_ERROR` — `limit` is non-numeric, or outside the list's
+  range. `message` names the field, for example `limit: …`.
+- `400 BAD_REQUEST` with `message` `"Invalid cursor"` — `cursor` is
+  malformed (not valid base64, not a cursor this API issued) or came from a
+  different list. Start again without it.
+- `400 INVALID_CURSOR` — the same failure on `GET .../suppliers/me/alerts`,
+  which has its own code. See
+  [Build a supplier portal](/guides/build-a-supplier-portal#alerts).

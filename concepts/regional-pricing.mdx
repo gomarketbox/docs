@@ -24,8 +24,12 @@ the single most specific rule that matches:
 POSTAL  →  STATE  →  COUNTRY  →  DEFAULT
 ```
 
-A `POSTAL` rule for the exact zip beats a `STATE` rule for the province,
-which beats a `COUNTRY` rule, which beats `DEFAULT`. `DEFAULT` isn't a
+A `POSTAL` rule beats a `STATE` rule for the province, which beats a
+`COUNTRY` rule, which beats `DEFAULT`. A `POSTAL` rule is considered only
+within its own country and state, and each entry in its `postalCodes` is a
+**prefix**: `"M5V"` matches `M5V 2T6`. Spaces and dashes are ignored, and
+case doesn't matter. When several entries match, the longest one wins, so
+`"M5V2"` beats `"M5V"`. `DEFAULT` isn't a
 placeholder or an error case — it's a real, advertised fallback ("price
 for any region we haven't set a specific rule for"), and every offering and
 package **must** have one. A rule set with no `DEFAULT` rule is invalid; the
@@ -117,7 +121,12 @@ A `reservationId` or `locationId` that doesn't exist is a caller error and
 404s, naming the id:
 
 ```json
-{ "code": "NOT_FOUND", "message": "Reservation resv_01k8p2… not found", "statusCode": 404 }
+{
+  "code": "NOT_FOUND",
+  "message": "Reservation resv_01k8p2… not found",
+  "statusCode": 404,
+  "requestId": "6d2a8f13-4b9e-4c71-8e05-1a7c3d9b2f64"
+}
 ```
 
 A **reservation** that **exists** but genuinely has no region — a `VIRTUAL`
@@ -143,7 +152,8 @@ each resolved currency matches the `currency` you sent. A mismatch is a
 {
   "code": "BAD_REQUEST",
   "message": "Package currency USD does not match order currency CAD",
-  "statusCode": 400
+  "statusCode": 400,
+  "requestId": "a93e5c07-2f1b-4d68-b7c4-9e0d3a6f8b21"
 }
 ```
 
@@ -183,20 +193,46 @@ the country/state/postal you expect.
 `state` the **ISO 3166-2 subdivision code** (`"ON"`, not `"Ontario"`) —
 these are what price rules key on. Both are coerced tolerantly on the way
 in: `"Canada"` resolves to `"CA"`, `"Ontario"` resolves to `"ON"`, and an
-alpha-3 country code (`"CAN"`) resolves too. Anything unrecognizable — a
-misspelling, a region that doesn't belong to the given country — is a
-`400`, not a silent `DEFAULT` fallback:
+alpha-3 country code (`"CAN"`) resolves too.
 
-```json
-{
-  "code": "VALIDATION_ERROR",
-  "message": "address.state: state must be an ISO 3166-2 subdivision of CA — a code (\"CA-XX\" or \"XX\") or its English name; got \"Ontarioo\"",
-  "statusCode": 400
-}
-```
+The two fields fail differently:
+
+- **An unrecognizable `country`** is a `400 VALIDATION_ERROR` on the address,
+  and nothing is written:
+
+  ```json
+  {
+    "code": "VALIDATION_ERROR",
+    "message": "address.country: country must be an ISO 3166-1 code or English name (e.g. \"CA\", \"CAN\", \"Canada\"); got \"Canadaa\"",
+    "statusCode": 400,
+    "requestId": "4e8b1d27-9c3f-4a56-b2e0-7d1a6f9c3b58"
+  }
+  ```
+
+- **An unrecognizable `state`** — a misspelling, or a region that doesn't
+  belong to the given country — is **accepted and stored as you sent it**.
+  Pricing then ignores it and falls back to the `COUNTRY` or `DEFAULT` rule,
+  silently. The one exception is an offering or package that has `STATE` or
+  `POSTAL` rules for that country. There, a fallback would charge a price you
+  didn't intend, so the order is refused with `400 UNRESOLVED_SUBDIVISION`.
+  The `message` names the value it couldn't resolve and the subdivisions the
+  offering prices by:
+
+  ```json
+  {
+    "code": "UNRESOLVED_SUBDIVISION",
+    "message": "\"Ontarioo\" is not a recognised ISO 3166-2 subdivision of CA, and this offering prices by subdivision there (ON). Send the ISO code (e.g. \"ON\") as the address state so the correct regional price applies.",
+    "statusCode": 400,
+    "requestId": "c61f3a92-0b7d-4e18-9a45-3f2e8d6b1c70"
+  }
+  ```
+
+So a `priceScope` of `COUNTRY` or `DEFAULT` on an address you expected to
+price by state is the tell for a `state` that didn't resolve. Send the ISO
+code to be sure.
 
 <Note>
-The `path.field` prefix (`address.state` above) is not specific to geo
+The `path.field` prefix (`address.country` above) is not specific to geo
 coercion — every validation failure on this API is reported the same way:
 the dot-joined field path, a colon, then the underlying message. Match on
 `message.includes(...)` or split on the first `:` if you need the bare

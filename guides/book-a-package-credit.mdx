@@ -239,8 +239,12 @@ export async function POST(request: Request) {
   const bearer = bearerFrom(request);
   if (!bearer) return NextResponse.json({ message: 'Missing bearer token' }, { status: 401 });
 
-  // From the browser: which credit, which saved address, and the cadence.
-  const { orderId, orderItemId, addressIndex, rrule, lookAheadStartDate } = await request.json();
+  // From the browser: which credit, which saved address, the cadence, and the
+  // IANA zone to show times in (Intl.DateTimeFormat().resolvedOptions().timeZone).
+  // `timezone` only sets how the window is read and how *Local fields render;
+  // each slot's own `bookingTz` is the zone the session is booked in.
+  const { orderId, orderItemId, addressIndex, rrule, lookAheadStartDate, timezone } =
+    await request.json();
 
   const { clientId, addresses = [] } = await myProfile(bearer);
   const a = addresses[addressIndex];
@@ -266,8 +270,8 @@ export async function POST(request: Request) {
         zipCode: a.zipCode,
         ...(a.unitNumber && { unitNumber: a.unitNumber }),
       },
-      timezone: 'America/Toronto',
-      lookAheadStartDate, // e.g. '2026-11-02T00:00:00-05:00'
+      timezone, // e.g. 'America/Toronto'; omit it to read and render in the project's default zone
+      lookAheadStartDate, // e.g. '2026-11-02T00:00:00-05:00', offset matching `timezone`
       rrule, // e.g. 'FREQ=WEEKLY;BYDAY=MO,WE;COUNT=3'
     }),
   });

@@ -27,9 +27,26 @@ the single arrows:
 - `CANCELLED` → nothing. Cancellation is terminal, so issue a new order
   instead.
 
+Send `cancellationReason` with `CANCELLED`. It is required: without it the
+request is a `400 VALIDATION_ERROR` and the order is not cancelled.
+
+```json
+{
+  "status": "CANCELLED",
+  "cancellationReason": "Client changed their mind before the first session"
+}
+```
+
 Cancelling an order cancels its remaining sessions and releases their
-credits. A `CANCELLED` order's credits can't be planned or booked: every route
-that draws them answers `409 ORDER_CANCELLED`. See
+credits. That cascade runs **asynchronously**, shortly after the status change
+returns, so a booking read straight afterwards can still show `SCHEDULED`. It
+cancels only `SCHEDULED` and `STARTED` bookings. `AWAITING_CONFIRMATION` and
+`DISPUTED` bookings have already happened, so the cascade leaves them alone,
+as it does settled ones. The client gets one email listing every cancelled
+session, and each affected supplier gets one listing their own.
+
+A `CANCELLED` order's credits can't be planned or booked: every route that
+draws them answers `409 ORDER_CANCELLED`. See
 [Create a package booking](/guides/create-a-package-booking#a-cancelled-order-books-nothing).
 
 Any other transition is a `400 BAD_REQUEST`.
@@ -52,7 +69,10 @@ A `409 VERSION_CONFLICT` from the same route still means the order changed
 underneath you: re-read it and decide again.
 
 `DELETE /v1/projects/{projectId}/orders/{orderId}` is a **soft-delete** —
-the order is hidden from lists but its data is retained.
+the order is hidden from lists but its data is retained. Deleting an order
+that isn't already `CANCELLED` also sets its status to `CANCELLED`. Reserve
+delete for orders raised in error; cancel an order that was genuinely called
+off.
 
 ## Anatomy
 
@@ -123,6 +143,11 @@ or the `DEFAULT` rule; see [Regional pricing](/concepts/regional-pricing):
 ```
 
 You can also create an order with `items: []` and add items afterwards.
+
+A `PACKAGE` line names the package instead: `{ "skuType": "PACKAGE",
+"packageId": "pkg_…" }`. The server derives the service, offering, session
+count, price and expiry from the package. Add `PACKAGE` lines here, at create:
+`POST .../orders/{orderId}/items` takes no `packageId`.
 
 Pass `locale` — the language the buyer completed the purchase in, typically the
 language segment of your storefront URL — and MarketBox records it three times:
@@ -202,12 +227,15 @@ counted. See [Report site events](/guides/report-site-events#tie-a-purchase-to-i
 Items have their own sub-resource under an order:
 
 - `POST .../orders/{orderId}/items` — add an item. `unitPrice` is
-  derived from the offering and snapshotted.
+  derived from the offering and snapshotted. It takes no `packageId`, so add
+  `PACKAGE` lines when you create the order.
 - `PATCH .../orders/{orderId}/items/{orderItemId}` — change
   **quantity only**. `skuType`, `serviceId`, `offeringId`, and the
   frozen `unitPrice` are immutable.
 - `DELETE .../orders/{orderId}/items/{orderItemId}` — remove the
-  item from the order.
+  item from the order. Removing a `PACKAGE` line doesn't retract the bookings
+  already made from it. Check `GET .../orders/{orderId}/package-bookings`
+  before you remove one.
 
 The snapshot pattern is deliberate: an order is a historical record of
 "what the client bought at the price it was when they bought it."
@@ -376,3 +404,8 @@ Each of these is a `400`:
 - `POST /v1/projects/{projectId}/orders/{orderId}/items`
 - `PATCH /v1/projects/{projectId}/orders/{orderId}/items/{orderItemId}`
 - `DELETE /v1/projects/{projectId}/orders/{orderId}/items/{orderItemId}`
+- `POST /v1/projects/{projectId}/orders/{orderId}/package-bookings` — see [Create a package booking](/guides/create-a-package-booking)
+- `GET  /v1/projects/{projectId}/orders/{orderId}/package-bookings`
+- `POST /v1/projects/{projectId}/orders/{orderId}/transactions`
+- `GET  /v1/projects/{projectId}/transactions`
+- `POST /v1/projects/{projectId}/orders/{orderId}/payment-intent` — see [Accept payments with Stripe](/guides/accept-payments-with-stripe)

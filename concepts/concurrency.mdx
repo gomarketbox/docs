@@ -5,12 +5,13 @@ description: Supplier time is exclusive — how MarketBox guards against double-
 
 Two things in this API can race, and they are guarded differently.
 
-**A supplier's time is exclusive.** Two bookings can never overlap on the
+**A supplier's time is exclusive.** Two bookings can't overlap on the
 same supplier, and every write that claims supplier time — a booking, a
 package booking, a hold, a reschedule, a hold conversion — passes through
 an **occupancy guard** that enforces it transactionally. If two callers
 race for the same time, exactly one wins; the other gets a `409` naming
-what blocked it.
+what blocked it. (The guard is on for every project by default; see
+[When the guard is off](#when-the-guard-is-off) for the one exception.)
 
 **Everything else is optimistic.** Mutable resources (bookings, orders,
 order items) carry a numeric `version` that advances on every write. If
@@ -28,8 +29,9 @@ Time on a supplier's calendar can be claimed by exactly one of two things:
 The guard runs inside the same transaction as the booking write, so
 there is no window between "we checked" and "we wrote". Two concurrent
 `POST /bookings` for the same supplier at the same instant produce exactly
-one booking and one `409` — never two bookings, and never a half-written
-package.
+one booking and one `409` — never two bookings (unless the
+[guard is off](#when-the-guard-is-off) for your project), and never a
+half-written package.
 
 <Note>
 The guard enforces **hard interval exclusivity** only. Travel buffers,
@@ -38,6 +40,17 @@ engine on the read side, when you search. The write guard is the safety net
 underneath: it is what makes a physically impossible schedule
 unrepresentable, even if you book by hand without searching first.
 </Note>
+
+### When the guard is off
+
+A project setting, `suggestionConfig.enforceOccupancyGuard`, can switch the
+guard off. It defaults to `true`. It is set in the project's settings, and
+the public API can't read or change it. With the guard off,
+`POST /bookings` and `POST .../package-bookings` write bookings without
+checking or claiming supplier time. They never return `SLOT_BOOKED` or
+`SLOT_HELD`, and two of them can overlap. Holds, hold conversions and
+reschedules still check. If you see overlapping bookings on one supplier,
+check whether the setting is off for your project.
 
 ### Intervals are half-open
 
@@ -68,10 +81,11 @@ blocking `bookingId`.
 {
   "code": "SLOT_BOOKED",
   "message": "Supplier time is not available: BOOKING bk_01k16f2a0e5x9jv6r0c1qs7pm (2026-07-15T14:00:00.000Z–2026-07-15T15:00:00.000Z)",
+  "statusCode": 409,
+  "requestId": "1c8e4a6f-3d2b-4f97-a5e1-0b9d7c3f6a24",
   "conflicts": [
     {
       "claimType": "BOOKING",
-      "supplierId": "sup_01kv60qgnef2kt3pvqgwmkbzfr",
       "startUtc": "2026-07-15T14:00:00.000Z",
       "endUtc": "2026-07-15T15:00:00.000Z",
       "reservationId": null,
@@ -128,7 +142,7 @@ Every booking, order, and order item DTO includes a numeric `version`:
 {
   "bookingId": "bk_...",
   "version": 4,
-  "status": "CONFIRMED"
+  "status": "SCHEDULED"
 }
 ```
 

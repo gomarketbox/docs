@@ -292,6 +292,11 @@ curl "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/suppliers/sup_01kv60q
 }
 ```
 
+<Warning>
+  The response carries the supplier's `email`, `phone` and address. Don't pass
+  it straight to a browser: copy the fields your page renders.
+</Warning>
+
 An **inactive** supplier is returned, with `active: false`, so a profile page
 for a paused supplier still renders. This differs from the list, which hides
 them. A `404` means the id is unknown in this project, belongs to another
@@ -435,7 +440,10 @@ curl "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/suppliers?lat=43.7462
 </Warning>
 
 Only active suppliers are listed; inactive and deleted ones never appear, on
-any combination of filters. Results are ordered by supplier id, not by name.
+any combination of filters. With no filter, results are in name order (last
+name, then first name). With a service, skill or `lat`/`lng` filter, they are
+ordered by supplier id. With only a country, state or city filter, they follow
+the location index, so don't rely on any particular order.
 
 Treat `nextCursor: null` as the **only** end-of-results signal — never stop on
 a page that merely looks short. A cursor is valid only against the filter set
@@ -456,7 +464,7 @@ API exposes it too, so you can keep a roster in sync from your own system:
 | --- | --- |
 | Create | `POST /v1/projects/{projectId}/suppliers` |
 | Update | `PUT /v1/projects/{projectId}/suppliers/{supplierId}` |
-| Soft-delete | `DELETE /v1/projects/{projectId}/suppliers/{supplierId}` |
+| Soft-delete (see below) | `DELETE /v1/projects/{projectId}/suppliers/{supplierId}` |
 | Add a service | `POST /v1/projects/{projectId}/suppliers/{supplierId}/services/{serviceId}` |
 | Remove a service | `DELETE /v1/projects/{projectId}/suppliers/{supplierId}/services/{serviceId}` |
 | Add a skill | `POST /v1/projects/{projectId}/suppliers/{supplierId}/skills/{skillId}` |
@@ -478,6 +486,21 @@ Three profile fields have write rules worth knowing:
 
 An unparseable phone or a malformed locale is a `400 VALIDATION_ERROR` — the
 row is not written.
+
+`email` is unique within the project. A `POST` or `PUT` that uses another
+supplier's email is `409 CONFLICT`, "A supplier with this email already exists
+in the project", and nothing is written.
+
+A `DELETE` is permanent around the edges, even though the profile itself is
+only soft-deleted and stays readable to the bookings that reference it:
+
+- Every service and skill mapping is hard-deleted, and the avatar images are
+  removed.
+- The supplier's sign-in loses its supplier role.
+- Existing bookings are **not** cancelled or reassigned. Deal with the
+  supplier's diary first.
+- There is no undelete. To take a supplier off the roster for a while, set
+  `active: false` with `PUT` instead.
 
 A `DELETE` that races a change to the supplier's sign-in, such as the supplier
 accepting an invitation at that moment, is `409 CONFLICT`, "This supplier's
@@ -504,9 +527,10 @@ the API key and the supplier's user token. The API never takes a supplier id
 there: `me` is the supplier the token belongs to. See
 [Build a supplier portal](/guides/build-a-supplier-portal).
 
-`GET /v1/projects/{projectId}/suppliers/me` also returns the fields the public
-detail endpoint leaves out: phone, email, address, `active`, timezone, and the
-service and skill ids.
+`GET /v1/projects/{projectId}/suppliers/me` returns the supplier's own record
+as the MarketBox dashboard shows it. It adds `serviceIds` and `skillIds`, the
+raw assignments, where the public endpoints return only the joined `services`
+and `skills`.
 
 ## Bookings for one supplier
 

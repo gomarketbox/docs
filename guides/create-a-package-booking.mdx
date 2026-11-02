@@ -48,10 +48,11 @@ A package booking is four calls, always in this order:
    the package purchasable — it's the order item every session will draw
    down. The server derives the service, offering, session count, and price
    from the package.
-4. **Book the slate.** `POST /orders/{orderId}/package-bookings` with just
-   `{ orderItemId, slateId }` creates all N bookings atomically. You never
-   copy times or locations out of the slate response by hand — the server
-   re-resolves every session itself.
+4. **Book the slate.** `POST /orders/{orderId}/package-bookings` with
+   `{ orderItemId, idempotencyKey, slateId }` creates all N bookings
+   atomically — up to 15 sessions with the default `all_or_nothing`. You
+   never copy times or locations out of the slate response by hand — the
+   server re-resolves every session itself.
 
 ```mermaid
 sequenceDiagram
@@ -65,7 +66,7 @@ sequenceDiagram
     MB-->>BFF: { status: "OK", primarySlate: { slateId, slots[] } }
     BFF->>MB: POST .../orders { PACKAGE item }
     MB-->>BFF: { data: { order: { orderId }, items: [{ orderItemId }] } }
-    BFF->>MB: POST .../orders/{orderId}/package-bookings { orderItemId, slateId }
+    BFF->>MB: POST .../orders/{orderId}/package-bookings { orderItemId, idempotencyKey, slateId }
     MB-->>BFF: { created: [...8 bookings], quantityRemaining: 0 }
     BFF-->>B: Package booked
 ```
@@ -290,8 +291,8 @@ You only need `primarySlate.slateId` for the next steps — hold onto it.
 Create an order with one `PACKAGE` item naming the package. You don't send
 the service, offering, session count, or price — the server derives all of
 them from the package definition. You **do** need to tell the order where
-this booking happens, or it prices off the package's `DEFAULT` rule instead
-of the regional one. This guide's flow never holds the slate (holding is
+this booking happens, or it prices off the client's default saved address
+(or the package's `DEFAULT` rule) instead of the region you quoted. This guide's flow never holds the slate (holding is
 covered separately, below), so the region source it actually has on hand at
 this point is the same `address` (or `locationId`) passed to
 `POST /availability/package-slate` in Step 2 — pass that:
@@ -299,9 +300,11 @@ this point is the same `address` (or `locationId`) passed to
 ```ts
 // app/api/bff/orders/route.ts
 import { NextResponse } from 'next/server';
+import { signedInClientId } from '@/lib/client'; // see Create a single booking
 
 export async function POST(request: Request) {
-  const { clientId, packageId } = await request.json();
+  const clientId = await signedInClientId(request); // never from the request body
+  const { packageId } = await request.json();
 
   const res = await fetch(
     `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/orders`,
@@ -357,12 +360,14 @@ priority order.
 </Tip>
 
 <Warning>
-**Without `reservationId`, `locationId`, or `address`, the order prices at
-the package's `DEFAULT` rule** — which may be a different currency from the
-regional price you displayed on the storefront. If you get `Package
+**Without `reservationId`, `locationId`, or `address`, the order prices off
+the client's default saved address** (or their first saved address, if no
+default is set). Only a client with no saved address at all prices at the
+package's `DEFAULT` rule. Either way, the price and currency may differ from
+the regional price you displayed on the storefront. If you get `Package
 currency X does not match order currency Y`, that's what happened: you told
 the order what currency you quoted, but not *where* the booking happens, so
-it couldn't resolve the same regional rule. See
+it resolved a different regional rule. See
 [Regional pricing](/concepts/regional-pricing).
 </Warning>
 
@@ -403,14 +408,19 @@ with `orderId` and the `slateId` from Step 2.
 </Step>
 
 <Step title="Book the slate">
-Book all N sessions in one call by passing the `orderItemId` from Step 3 and
-the `slateId` from Step 2 — no session details required. Provide **exactly
-one** of `sessions`, `slateId`, or `slotIds`; `slateId` is the recommended
-path.
+Book all N sessions in one call by passing the `orderItemId` from Step 3,
+the `slateId` from Step 2 and an `idempotencyKey` — no session details
+required. Provide **exactly one** of `sessions`, `slateId`, or `slotIds`;
+`slateId` is the recommended path. `idempotencyKey` is **required**: a body
+without it is a `400 VALIDATION_ERROR`.
+
+Mint the key **once per booking attempt** — for example in the browser when
+the client clicks **Book** — and send the same key when you retry that
+attempt. A key minted inside the handler is new on every call, so a retry
+would no longer be recognised as one.
 
 ```ts
 // app/api/bff/package-bookings/route.ts
-import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 
 export async function POST(
@@ -418,7 +428,8 @@ export async function POST(
   ctx: { params: Promise<{ orderId: string }> },
 ) {
   const { orderId } = await ctx.params;
-  const { orderItemId, slateId } = await request.json();
+  // idempotencyKey: minted once per attempt by the caller, reused on retry.
+  const { orderItemId, slateId, idempotencyKey } = await request.json();
 
   const res = await fetch(
     `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/orders/${orderId}/package-bookings`,
@@ -430,7 +441,7 @@ export async function POST(
       },
       body: JSON.stringify({
         orderItemId,
-        idempotencyKey: randomUUID(), // safe retry — reusing it replays the same result
+        idempotencyKey, // same key on retry replays the same result
         atomicity: 'all_or_nothing',
         slateId,
       }),
@@ -466,6 +477,14 @@ abridged to the first two of eight):
   "quantityRemaining": 0
 }
 ```
+
+<Note>
+**At most 15 sessions per atomic call.** `all_or_nothing` books every
+session in one transaction, which caps it at 15. A larger slate is
+`422 PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC`, and nothing is booked. Use
+`atomicity: "best_effort"` (the project must enable
+`suggestionConfig.allowPartialPackages`), or book a smaller slate.
+</Note>
 
 <Tip>
 **Off-by-one trap.** `sessionIndex` is **1-based** in the slate's `slots[]`
@@ -650,7 +669,7 @@ is not checked against a client. `clientId` beside `packageId` is a `400
 VALIDATION_ERROR`.
 
 Book the result with `POST /orders/{orderId}/package-bookings` and
-`{ orderItemId, slateId }`, as in Step 4. When the signed-in client books
+`{ orderItemId, idempotencyKey, slateId }`, as in Step 4. When the signed-in client books
 their own credit from your site, use the client-plane route instead. See
 [Book a client's package credit](/guides/book-a-package-credit).
 
@@ -743,7 +762,7 @@ will not consume your own hold and returns `409 SLOT_HELD` naming the
 | Chosen slot went stale between building and booking | `SLOT_NO_LONGER_BOOKABLE` | `409` | The response includes `freshSuggestions` — rebuild from it and retry. |
 | More than 15 sessions with `atomicity: "all_or_nothing"` | `PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC` | `422` | Use `atomicity: "best_effort"` (requires the project to enable `allowPartialPackages`), or book a smaller slate. |
 | `best_effort` requested but the project hasn't enabled it | `BEST_EFFORT_NOT_ENABLED` | `422` | Stay with `all_or_nothing` (≤15 sessions), or ask the project to enable `suggestionConfig.allowPartialPackages`. |
-| The supplier's time is already claimed by a live hold (often your own — you held, then booked directly instead of converting) | `SLOT_HELD` | `409` | `conflicts[0].reservationId` names the hold. Convert it: [Hold slots during checkout](/guides/hold-slots-for-checkout#handling-a-held-slot). |
+| The supplier's time is already claimed by a live hold (often your own — you held, then booked directly instead of converting) | `SLOT_HELD` | `409` | The first `conflicts[]` entry with `claimType: "HOLD"` names the hold in `reservationId`. Convert it: [Hold slots during checkout](/guides/hold-slots-for-checkout#handling-a-held-slot). |
 | The supplier's time is already claimed by a confirmed booking | `SLOT_BOOKED` | `409` | Rebuild the slate and book a different time. |
 | Heavy concurrent writes on one supplier-day exhausted the internal retry | `OCCUPANCY_CONTENTION` | `409` | Transient — retry the same request after a short backoff. |
 | Same `idempotencyKey` reused with a different request body — even one that would be invalid on its own | `IDEMPOTENCY_KEY_CONFLICT` | `409` | Generate a fresh `idempotencyKey` per distinct booking attempt; reusing the same key with the same body safely replays the original `201`, even after the credits ran out. See [Retry safely](#retry-safely-with-idempotencykey). |

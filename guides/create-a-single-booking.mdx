@@ -78,12 +78,40 @@ uses. Booking a `PHYSICAL` session instead? Pass that Location's
 [Regional pricing](/concepts/regional-pricing) for the full priority order
 (`reservationId` → `locationId` → `address`) and why it matters.
 
+Resolve the client's `clientId` on the server. Never trust a `clientId` the
+browser sends: anyone can put another client's id in a request body. For a
+signed-in client, `POST /clients/me` with their token returns it (see
+[Onboard the client](/guides/booking-flow-auth#onboard-the-client)):
+
+```ts
+// lib/client.ts — shared by the BFF routes below
+export async function signedInClientId(request: Request): Promise<string> {
+  const authorization = request.headers.get('authorization'); // the client's Bearer token
+  const res = await fetch(
+    `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/clients/me`,
+    {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.MARKETBOX_API_KEY!, // server-only
+        ...(authorization && { authorization }),
+      },
+    },
+  );
+  if (!res.ok) throw Object.assign(new Error('client lookup failed'), { status: res.status });
+  return (await res.json()).data.clientId as string;
+}
+```
+
+Booking on a client's behalf with no client signed in? Take the `clientId`
+from your own records on the server instead.
+
 ```ts
 // app/api/bff/orders/route.ts
 import { NextResponse } from 'next/server';
+import { signedInClientId } from '@/lib/client';
 
 export async function POST(request: Request) {
-  const { clientId } = await request.json();
+  const clientId = await signedInClientId(request); // never from the request body
 
   const res = await fetch(
     `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/orders`,
@@ -123,12 +151,14 @@ export async function POST(request: Request) {
 ```
 
 <Warning>
-**Without `reservationId`, `locationId`, or `address`, the order prices at
-the offering's `DEFAULT` rule** — which may be a different currency from the
-regional price you displayed. If you get `Item currency X does not match
-order currency Y`, that's what happened: you told the order what currency
-you quoted, but not *where* the session happens, so it couldn't resolve the
-same regional rule. See [Regional pricing](/concepts/regional-pricing).
+**Without `reservationId`, `locationId`, or `address`, the order prices off
+the client's default saved address** (or their first saved address, if no
+default is set). Only a client with no saved address at all prices at the
+offering's `DEFAULT` rule. Either way, the price and currency may differ
+from the regional price you displayed. If you get `Item currency X does not
+match order currency Y`, that's what happened: you told the order what
+currency you quoted, but not *where* the session happens, so it resolved a
+different regional rule. See [Regional pricing](/concepts/regional-pricing).
 </Warning>
 
 The response nests the order under `order`, not at the top level:
@@ -202,9 +232,11 @@ fields; see the location rules warning below for `PHYSICAL` and `VIRTUAL`.
 ```ts
 // app/api/bff/bookings/route.ts
 import { NextResponse } from 'next/server';
+import { signedInClientId } from '@/lib/client';
 
 export async function POST(request: Request) {
-  const { clientId, orderId, orderItemId } = await request.json();
+  const clientId = await signedInClientId(request); // never from the request body
+  const { orderId, orderItemId } = await request.json();
 
   const res = await fetch(
     `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/bookings`,
@@ -265,23 +297,17 @@ A successful response returns the created booking, `status: "SCHEDULED"`:
     "bookingStartUtc": "2026-07-09T13:30:00.000Z",
     "bookingEndUtc": "2026-07-09T14:00:00.000Z",
     "bookingLocalDate": "2026-07-09",
-    "bookingLocalStartTime": "09:30",
-    "services": [
-      {
-        "serviceId": "srv_01kv60qg12e82acr78edfnjhvv",
-        "offeringId": "off_01kv60qge5eh59ap0gw0pqrrys",
-        "businessModelType": "SINGLE_BOOKING",
-        "orderId": "ord_01kx16ek2jf4r9da74adf6m4h0",
-        "orderItemId": "oi_01kx16ek2kf2fsc9x7b2n1dfc9"
-      }
-    ]
+    "bookingLocalStartTime": "09:30:00"
   }
 }
 ```
 
 <Note>
 The `bookingLocal*` fields are computed server-side from `bookingTz` — never
-send them yourself. See [Timezones](/concepts/timezones).
+send them yourself. Times are `HH:mm:ss`. See [Timezones](/concepts/timezones).
+
+The booking response doesn't echo the service lines. Read them from
+`GET /bookings/{bookingId}/aggregate`.
 </Note>
 </Step>
 </Steps>
@@ -308,6 +334,7 @@ for you on the single-booking path.
 
 | Endpoint | Method | Auth | Description |
 | --- | --- | --- | --- |
+| `/v1/projects/{projectId}/clients/me` | `POST` | `x-api-key` + `Bearer` | Resolve the signed-in client's `clientId` on the server. |
 | `/v1/projects/{projectId}/orders` | `POST` | `x-api-key` | Create the order and its `SINGLE_SESSION` item. Order id is nested at `data.order.orderId`. |
 | `/v1/projects/{projectId}/orders/{orderId}/aggregate` | `GET` | `x-api-key` | Read the order plus its items — use this to (re)fetch `orderItemId`. |
 | `/v1/projects/{projectId}/bookings` | `POST` | `x-api-key` | Create the booking. Each service line must reference an existing `orderId` + `orderItemId`. |
@@ -327,12 +354,15 @@ for you on the single-booking path.
 | `orderId` doesn't exist, or belongs to another project | `INVALID_ORDER_REFERENCE` | `400` | Double-check the `orderId` came from a `POST /orders` call in the same project. |
 | `orderItemId` doesn't exist on that order | `INVALID_ORDER_ITEM_REFERENCE` | `400` | Re-fetch the order aggregate — you may be reusing a stale id. |
 | `orderItemId`'s service/offering doesn't match the booking's service line | `ORDER_ITEM_SERVICE_MISMATCH` | `400` | The `serviceId`/`offeringId` on the booking's service line must match the order item that funded it. |
+| The service line's `businessModelType` isn't what the order item is sold as | `ORDER_ITEM_BUSINESS_MODEL_MISMATCH` | `400` | A `SINGLE_SESSION` item books only as `SINGLE_BOOKING`. |
+| `clientId` doesn't exist in this project, on the order or the booking | `NOT_FOUND` | `404` | The message is `Client not found`. Resolve the client server-side with `POST /clients/me`. |
+| The service has no active `SINGLE_BOOKING` rate, on order create | `SERVICE_NOT_SOLD_AS` | `422` | The service isn't sold as a single session. Sell an offering of a service that is, or ask the business to add the rate. |
 | Order item has no quantity left to draw down | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | `400` | A `SINGLE_SESSION` item only funds one booking. Create a new order for another session. |
 | The order is `CANCELLED` | `ORDER_CANCELLED` | `409` | Its credits were released when it was cancelled. Don't retry; create a new order. `DRAFT`, `PENDING` and `PAID` orders book as before. |
 | Offering isn't `ACTIVE` | `BAD_REQUEST` | `400` | Only active offerings can be booked or ordered. |
 | Wrong location fields for `locationType` | `VALIDATION_ERROR` | `400` | Match the table above — e.g. sending `latitude` on a `PHYSICAL` booking, or omitting `address` on `TRAVEL_ZONE`. |
 | `bookingEndUtc` not after `bookingStartUtc` | `BAD_REQUEST` | `400` | Fix the time window and retry. |
-| The supplier's time is claimed by a live hold — very often **your own**, if you held it and then called this route instead of converting | `SLOT_HELD` | `409` | Read `conflicts[0].reservationId` and call `POST /holds/{reservationId}/convert` instead. If the hold isn't yours, `heldUntil` says when it lapses. See [Hold slots during checkout](/guides/hold-slots-for-checkout#handling-a-held-slot). |
+| The supplier's time is claimed by a live hold — very often **your own**, if you held it and then called this route instead of converting | `SLOT_HELD` | `409` | Take the first `conflicts[]` entry with `claimType: "HOLD"`, read its `reservationId`, and call `POST /holds/{reservationId}/convert` instead. If the hold isn't yours, `heldUntil` says when it lapses. See [Hold slots during checkout](/guides/hold-slots-for-checkout#handling-a-held-slot). |
 | The supplier is already booked for that time | `SLOT_BOOKED` | `409` | `conflicts[0].bookingId` names the booking. Supplier time is exclusive — offer a different slot. |
 | Heavy concurrent writes on one supplier-day exhausted the internal retry | `OCCUPANCY_CONTENTION` | `409` | Transient — retry the same request after a short backoff. See [Concurrency](/concepts/concurrency). |
 

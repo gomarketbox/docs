@@ -9,16 +9,24 @@ service offerings, with optional notes and participants.
 
 ## The booking lifecycle
 
-A booking is created as `SCHEDULED` and settles into one of the outcomes
-on the right. The middle column is where the platform decides what happened
-after the session ended.
+A booking is created as `SCHEDULED` and settles into one of the four outcomes
+on the bottom row. `AWAITING_CONFIRMATION` and `DISPUTED` are where the
+platform decides what happened after the session ended.
 
 ```
-SCHEDULED ──► STARTED ──► AWAITING_CONFIRMATION ──► COMPLETED
-    │            │                 │                CLIENT_NO_SHOW
-    │            │                 └──► DISPUTED ──► SUPPLIER_NO_SHOW
-    └────────────┴──────────────────────────────────► CANCELLED
+SCHEDULED ──► STARTED ──► AWAITING_CONFIRMATION ──► DISPUTED
+    │  │          │              ▲      │               │
+    │  └──────────┼──────────────┘      │               │
+    ▼             ▼                     ▼               ▼
+ COMPLETED · CLIENT_NO_SHOW · SUPPLIER_NO_SHOW · CANCELLED
+    │             │                 │
+    └─────────────┴─────────────────┴──► AWAITING_CONFIRMATION (operator reversal)
 ```
+
+Each state on the top row can reach each outcome on the bottom row, except that
+a `SCHEDULED` booking reaches `COMPLETED` only through the supplier's own
+attendance report. A `SCHEDULED` booking that ends without being started moves
+straight to `AWAITING_CONFIRMATION`.
 
 `status` on every booking response is one of nine values:
 
@@ -28,16 +36,24 @@ SCHEDULED ──► STARTED ──► AWAITING_CONFIRMATION ──► COMPLETED
 | `STARTED` | The session is under way. | Your key, or the supplier, once `bookingStartUtc` has passed. |
 | `AWAITING_CONFIRMATION` | The session has ended and MarketBox is waiting on the two parties' attendance reports. | The platform, when `bookingEndUtc` passes. An operator can also reverse a settled booking back here within a window. |
 | `DISPUTED` | The client and supplier reported different things about attendance. | The platform only. Resolved by an operator in the MarketBox console. |
-| `COMPLETED` | Delivered. | The platform (both attended, or the confirmation window timed out), or your key. |
-| `CLIENT_NO_SHOW` | The client did not attend. | The platform (from the supplier's report), your key, or the supplier — after a grace period past the start. |
-| `SUPPLIER_NO_SHOW` | The supplier did not attend. | The platform (from the client's report), your key, or the client — after the same grace period. |
-| `CANCELLED` | Called off. **Hard-terminal**: money may have moved, so nothing leaves this state. | Your key, or either party, before `bookingEndUtc`. |
+| `COMPLETED` | Delivered. | The platform (both attended, or the confirmation window timed out), the supplier's own report that they attended, or your key. |
+| `CLIENT_NO_SHOW` | The client did not attend. | Your key, after a grace period past the start. No attendance report sets it: a report says only whether its own side attended. |
+| `SUPPLIER_NO_SHOW` | The supplier did not attend. | The supplier's own report that they did not attend, or your key after the same grace period. |
+| `CANCELLED` | Called off. **Hard-terminal**: money may have moved, so nothing leaves this state. | The supplier, through the [supplier plane](/guides/build-a-supplier-portal), only while the booking is `SCHEDULED` and before `bookingEndUtc`. Your key, also from `STARTED` (before `bookingEndUtc`) and from `AWAITING_CONFIRMATION`. An operator, also from `DISPUTED`. |
 | `NO_SHOW` | **Legacy, read-only.** The pre-split no-show, which does not say which side was absent. Nothing transitions out of it. | Nothing, any more. Bookings recorded before the split keep it indefinitely. |
 
 You move a booking with
 `POST /v1/projects/{projectId}/bookings/{bookingId}/status`. The request
 body's `status` enum is narrower than the response's: `SCHEDULED` and
 `DISPUTED` can be observed but never requested, so they are not in it.
+`AWAITING_CONFIRMATION` is in the enum because an operator can request it, but
+your key cannot: sending it is always a `400`.
+
+The supplier's own attendance report is filed through the
+[supplier plane](/guides/build-a-supplier-portal#bookings-and-the-attendance-report).
+A report you file with your key, through
+`POST /v1/projects/{projectId}/bookings/{bookingId}/reports`, is recorded, but
+filing it doesn't change the booking's status.
 
 <Note>
   **What an API key may do.** A key carries every transition an operator
@@ -82,6 +98,18 @@ What happens to the session depends on the order item:
   "status": "CANCELLED",
   "cancellationReason": "Client called the morning of the session",
   "creditTreatment": "FORFEIT"
+}
+```
+
+`cancellationReason` is required with `CANCELLED`. Leave it out and nothing is
+cancelled:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "cancellationReason: cancellationReason is required when status is CANCELLED",
+  "statusCode": 400,
+  "requestId": "3e7a1c5d-9b24-4f68-8d0e-6a2f4c9b1e57"
 }
 ```
 
@@ -149,7 +177,15 @@ GET /v1/projects/{projectId}/bookings/{bookingId}/aggregate
 ```
 
 This is the right call for "show me everything about this booking" —
-one round trip instead of four.
+one round trip instead of five. Beside `booking`, `services`, `participants`
+and `notes`, it returns:
+
+- **`reports`** — the attendance reports filed on the booking, at most one per
+  side.
+- **`parties`** — `client` and `supplier`, each with its id and a best-effort
+  `fullName`. `supplier` is `null` when no supplier is assigned. No email
+  address is returned for either party. This is the only public way to turn a
+  `clientId` into a name.
 
 A booking funded by an order that carried
 [`attribution`](/resources/orders#attribution) carries a copy of it:
@@ -159,22 +195,33 @@ the booking.
 ## Creating a booking
 
 `POST /v1/projects/{projectId}/bookings` creates a booking and its
-services in one transaction. The body carries:
+services in one transaction. Every booking draws on an order item, so create
+the order first. The body carries:
 
-- **`supplierId`** and **`clientId`** — who serves and who is served.
-- **`bookingStartUtc`**, **`bookingEndUtc`**, **`bookingTz`** — when.
+- **`clientId`** — who is served. Required.
+- **`supplierId`** — who serves. Optional: omit it to create an unassigned
+  booking.
+- **`bookingStartUtc`**, **`bookingEndUtc`**, **`bookingTz`** — when. Required.
   Local-time fields are derived. See [Timezones](/concepts/timezones).
+- **`locationType`** — `VIRTUAL`, `PHYSICAL` or `TRAVEL_ZONE`. Required, and it
+  decides the other location fields. `PHYSICAL` needs `locationId`.
+  `TRAVEL_ZONE` needs `locationId` (the `stz_` travel zone), `latitude`,
+  `longitude` and `address`. `VIRTUAL` takes none of them.
 - **`capacity`** — how many participants this booking can hold (1 for
-  one-to-one bookings; >1 for classes).
-- **`services`** — at least one service line. Each line names a
-  `serviceId` + `offeringId`; price and duration are pulled from the
-  offering at create time and **snapshotted** into the booking.
+  one-to-one bookings; >1 for classes). Defaults to 1.
+- **`services`** — at least one service line. Each line requires
+  `serviceId`, `offeringId`, `businessModelType`, `orderId` and
+  `orderItemId`; `quantity` defaults to 1. Price and duration are pulled from
+  the offering at create time and **snapshotted** into the booking.
 - **`notes`** — optional initial notes.
+
+See [the quickstart](/quickstart#3-create-a-booking) for a complete request.
 
 The server validates:
 
 - `bookingEndUtc > bookingStartUtc`.
-- Every referenced offering exists and is `ACTIVE` (otherwise 400).
+- Every referenced offering exists (otherwise `404`) and is `ACTIVE`
+  (otherwise `400`).
 - All service lines share a single currency (otherwise 400).
 - `bookingTz` is a valid IANA identifier.
 - `clientId` and `supplierId` belong to this project. An id from another
@@ -195,6 +242,30 @@ The server validates:
   "requestId": "5b0e6a2c-8f41-4d7e-9c3a-2e6d1f0b7a94"
 }
 ```
+
+Each service line's order item is checked before anything is written. The
+first line that fails decides the error:
+
+| Status | `code` | Meaning |
+| --- | --- | --- |
+| `400` | `INVALID_ORDER_REFERENCE` | `orderId` doesn't name an order in this project. |
+| `409` | `ORDER_CANCELLED` | The order is `CANCELLED`. Its cascade already released its credits, so it books nothing. |
+| `400` | `INVALID_ORDER_ITEM_REFERENCE` | `orderItemId` isn't an item on that order. |
+| `400` | `ORDER_ITEM_SERVICE_MISMATCH` | The order item is for a different `serviceId` or `offeringId` than the line. |
+| `400` | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | The order item has fewer sessions left than the line's `quantity`. |
+| `400` | `ORDER_ITEM_BUSINESS_MODEL_MISMATCH` | The line's `businessModelType` isn't one the order item is sold as (see above). |
+
+The supplier's time is claimed in the same write as the booking. When it can't
+be claimed, you get a `409` and nothing is written:
+
+| `code` | Meaning | What to do |
+| --- | --- | --- |
+| `SLOT_HELD` | A live hold covers the time. The body carries `conflicts[]` and a `hint` naming the hold. | Convert the hold with `POST .../holds/{reservationId}/convert`, or release it. This route never consumes a hold. |
+| `SLOT_BOOKED` | The supplier already has a booking that overlaps. | Search availability again. |
+| `OCCUPANCY_CONTENTION` | The supplier's calendar is under heavy concurrent writes. | Retry. |
+
+See [Concurrency](/concepts/concurrency#the-three-supplier-time-conflicts) for
+the `conflicts[]` shape.
 
 <Note>
   **Note fan-out is non-atomic.** If a note write fails after the
@@ -219,11 +290,13 @@ The server validates:
 core fields. The body may include any subset of:
 
 - `bookingStartUtc`, `bookingEndUtc`, `bookingTz`
-- `supplierId`, `clientId`
+- `supplierId`
+- `latitude`, `longitude`, `address`
 - `capacity`
 
 You cannot send the four `bookingLocal*` fields or `locale` — they're
-server-derived.
+server-derived. You cannot change the client either: `clientId` is not a PATCH
+field, so a `clientId` in the body is dropped and the booking keeps its client.
 
 If you change any time field, the server recomputes all four local
 fields against the (possibly new) `bookingTz`.
@@ -277,7 +350,7 @@ Notes are attached at one of two scopes:
 
 | Scope                | When to use                                                   |
 | -------------------- | ------------------------------------------------------------- |
-| `BOOKING`            | Applies to the whole booking. Set `bookingServiceId: null`.    |
+| `BOOKING`            | Applies to the whole booking. Omit `bookingServiceId`; `null` is a `400`. |
 | `BOOKING_SERVICE`    | Applies to one service line. Set `bookingServiceId: <id>`.    |
 
 CRUD lives under `.../bookings/{bookingId}/notes[/{noteId}]`. The list
@@ -306,3 +379,7 @@ and a live playground for every endpoint:
 - `GET  /v1/projects/{projectId}/bookings/{bookingId}/notes`
 - `PATCH /v1/projects/{projectId}/bookings/{bookingId}/notes/{noteId}`
 - `DELETE /v1/projects/{projectId}/bookings/{bookingId}/notes/{noteId}`
+- `POST /v1/projects/{projectId}/bookings/{bookingId}/reports`
+- `GET  /v1/projects/{projectId}/bookings/{bookingId}/reports`
+- `POST /v1/projects/{projectId}/bookings/{bookingId}/reviews` — see [Reviews](/resources/reviews)
+- `GET  /v1/projects/{projectId}/bookings/{bookingId}/reviews`
