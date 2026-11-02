@@ -125,6 +125,13 @@ export function getUserManager() {
     },
   });
 }
+
+// The signed-in user's access token, or null when signed out or expired.
+// The browser snippets below send it to your BFF as `Bearer <token>`.
+export async function getAccessToken(): Promise<string | null> {
+  const user = await getUserManager().getUser();
+  return user && !user.expired ? user.access_token : null;
+}
 ```
 </Step>
 
@@ -291,6 +298,8 @@ your app:
 
 ```ts
 // app/auth/callback/page.tsx (browser)
+import { getAccessToken } from '@/lib/oidc'; // defined in Configure the OAuth client
+
 const token = await getAccessToken();
 const res = await fetch('/api/bff/onboard', {
   method: 'POST',

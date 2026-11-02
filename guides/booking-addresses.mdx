@@ -27,14 +27,19 @@ hand it to a maps SDK without re-parsing anything.
 | `streetName` | Yes | `"Queen St W"` |
 | `city` | Yes | `"Toronto"` |
 | `state` | Yes | `"ON"` |
-| `country` | Yes | `"CA"` (ISO 3166-1 **alpha-2**) |
+| `country` | Yes | `"CA"` — ISO 3166-1 alpha-2, alpha-3 (`"CAN"`) or English name (`"Canada"`); stored as alpha-2 |
 | `zipCode` | Yes | `"M5H 2N2"` |
 | `unitNumber` | No | `"4B"` |
 
 <Note>
 `zipCode` accepts any format — it's a plain string, not validated against a
 country-specific pattern. `country` is the odd one out: it's the only field
-checked against a format (ISO-2), everything else is just "non-empty string."
+that is rejected when it can't be resolved. MarketBox converts an alpha-3
+code or English name to alpha-2 before storing it, so you read back `"CA"`
+whichever you sent. A country it can't resolve is a `400 VALIDATION_ERROR`.
+`state` is converted to its ISO 3166-2 code (`"Ontario"` becomes `"ON"`)
+when it can be, and is kept as you typed it otherwise. Everything else is
+just "non-empty string."
 </Note>
 
 <Tip>
@@ -72,7 +77,7 @@ has no location fields, and `PHYSICAL` resolves everything from the stored
 [Create a single booking](/guides/create-a-single-booking#reference)).
 
 <Warning>
-Omitting `address` on any of the three cases above fails validation with a
+Omitting `address` on any of the four cases above fails validation with a
 `400` before the request does anything — there's no fallback that derives an
 address from `lat`/`lng` for you. Reverse-geocoding is your integration's
 responsibility (e.g. via a geocoding API), not MarketBox's.
@@ -87,7 +92,7 @@ This is the detail worth understanding before you assume you need to resend
 `POST /availability/package-slate`. The engine then **stamps that same
 address onto every persisted slot** in the slate (`slots[].address`), whether
 the slot's session is 1 of 8 or 8 of 8. When you later book with
-`{ orderItemId, slateId }`, the server re-resolves each session from its
+`{ orderItemId, idempotencyKey, slateId }`, the server re-resolves each session from its
 persisted slot — address included — so the TRAVEL_ZONE address rule on
 `POST /orders/{orderId}/package-bookings` is satisfied automatically. You
 never pass `address` a second time on the booking call itself.
@@ -95,7 +100,7 @@ never pass `address` a second time on the booking call itself.
 ```mermaid
 flowchart LR
     A["POST /availability/package-slate<br/>{ lat, lng, address }"] --> B["slot.address<br/>(stamped on every slot)"]
-    B --> C["POST .../package-bookings<br/>{ slateId }<br/>— no address needed"]
+    B --> C["POST .../package-bookings<br/>{ orderItemId, idempotencyKey, slateId }<br/>— no address needed"]
 ```
 
 The one place this doesn't apply automatically is the **transcribe** path
@@ -173,7 +178,7 @@ A slate built on the lat/lng (travel-zone) branch — `address` is a sibling of
 ```
 
 Every one of the 8 resolved `slots[]` in the response carries this same
-`address`. Book the slate with `{ orderItemId, slateId }` — no `address` field
+`address`. Book the slate with `{ orderItemId, idempotencyKey, slateId }` — no `address` field
 on that call at all. See
 [Create a package booking](/guides/create-a-package-booking) for the full
 flow this body belongs to.
@@ -198,8 +203,8 @@ or `PHYSICAL` bookings or holds, or on the `locationId` branch of
 | Scenario | Status | Resolution |
 | --- | --- | --- |
 | `address` missing on a `TRAVEL_ZONE` booking or session | `400` `VALIDATION_ERROR` | Supply the full structured object — every field except `unitNumber` is mandatory. |
-| `address` missing on the lat/lng branch of `package-slate` | `400` `VALIDATION_ERROR` (`path: ["address"]`) | Supply `address` alongside `lat`/`lng`, or switch to a stored `locationId` if you have one. |
-| `address` missing on a `TRAVEL_ZONE` interval of `POST /holds` | `400` `VALIDATION_ERROR` (`path: ["address"]`) | The hold is what convert rebuilds the booking from — send `address` (plus `latitude`/`longitude` and the `stz_` `locationId`) on the interval. See [Hold slots during checkout](/guides/hold-slots-for-checkout#troubleshooting). |
+| `address` missing on the lat/lng branch of `package-slate` | `400` `VALIDATION_ERROR`, `message` starting with the field path: `address: address is required when booking by lat/lng (travel zone)` | Supply `address` alongside `lat`/`lng`, or switch to a stored `locationId` if you have one. |
+| `address` missing on a `TRAVEL_ZONE` interval of `POST /holds` | `400` `VALIDATION_ERROR`, `message` starting with the field path, e.g. `intervals.0.address: address is required for TRAVEL_ZONE sessions` | The hold is what convert rebuilds the booking from — send `address` (plus `latitude`/`longitude` and the `stz_` `locationId`) on the interval. See [Hold slots during checkout](/guides/hold-slots-for-checkout#troubleshooting). |
 | A required field (e.g. `city`, `zipCode`) is missing or empty | `400` `VALIDATION_ERROR` | All fields but `unitNumber` must be non-empty strings — there's no partial-address fallback. |
 | Booking by `slateId` still fails with a missing-address error | Shouldn't happen | The slate stamps `address` onto every slot at build time; if you're hitting this, confirm you're not building `sessions[]` by hand without copying `slot.address`. |
 

@@ -22,7 +22,7 @@ attached server-side by your BFF — never in the browser.
 
 ## How it works
 
-A package storefront is two calls, always in this order:
+A package storefront is three calls, always in this order:
 
 1. **List the catalog.** `GET /services/{serviceId}/packages?status=ACTIVE`
    returns every sellable bundle on the service, across all of its offerings —
@@ -122,8 +122,10 @@ so it's always there. The storefront's job is to pick **one** entry to
 booking from; the order-create call later must pass a matching region
 source (`reservationId`, `locationId`, or `address`) so the **server**
 resolves that same rule. Show the `COUNTRY/CA` price and then create the
-order with no region fields, and the order will price off `DEFAULT`
-instead — possibly a different currency than what you displayed. See
+order with no region fields, and the order will price off the client's
+default saved address instead — or off `DEFAULT` when the client has no
+saved address. Either may be a different currency than what you
+displayed. See
 [Regional pricing](/concepts/regional-pricing) for the full resolution
 rule and how to keep display and order-create in agreement.
 </Note>

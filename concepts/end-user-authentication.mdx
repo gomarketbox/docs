@@ -101,10 +101,18 @@ business removes the person's role in the dashboard, their next call is refused.
 | Status and `code` | What it means |
 | --- | --- |
 | `401` | No token, a malformed `Authorization` header, or a token that is invalid or expired. Sign in again. |
+| `401 UNAUTHORIZED` | `"Missing user token"`: the token is valid but carries no `sub` claim — usually an ID token or a machine token forwarded by mistake. Forward the person's access token. |
+| `401 UNAUTHORIZED` | `"API key not provided"` or `"A publishable key cannot be used as an API key"`: your backend sent no API key, or sent the beacon's publishable key. Fix the backend, not the session. |
+| `403 FORBIDDEN` | `"API key not recognized"`: the API key isn't one MarketBox knows. |
 | `403 CAPABILITY_NOT_GRANTED` | The API key lacks Standard API access. |
-| `403 FORBIDDEN` | The key can't access this project, the person has no `ACTIVE` membership (`"No active membership on this project"`), or their roles lack the permission (`"Insufficient permissions for this action"`). |
+| `403 FORBIDDEN` | `"User account not found. Complete registration first."`: the token is valid, but the person never finished signing up. Send them back through sign-up. |
+| `403 FORBIDDEN` | The key can't access this project, the person has no `ACTIVE` membership (`"No active membership on this project"`), or their roles lack the permission (`"Insufficient permissions for this action"`). A supplier who hasn't accepted the business's invitation yet gets the membership refusal. |
 | `403 ACTING_ROLE_NOT_HELD` | The request sent an `X-MB-Acting-Role` header naming a role the person doesn't hold. You don't need that header. |
-| `404 NOT_FOUND` | The person passed every check but has no client profile or supplier record in this project. |
+| `404 NOT_FOUND` | The person passed every check but has no client profile or supplier record in this project. On the supplier plane the message is `"No supplier record for current user"`: the person is an `ACTIVE` member, but no supplier record is linked to their sign-in. |
+
+<Warning>
+Not every `401` means "sign in again". A missing or publishable **API key** is also a `401`, and so is a token without a `sub`. Signing the person in again fixes neither, so a client that re-logs on every `401` loops forever. Re-authenticate only on a `401` whose `code` is `HTTP_ERROR` (no token, a malformed header, or an invalid or expired token). Treat a `401 UNAUTHORIZED` as a bug in your backend and log it.
+</Warning>
 
 A client whose access was removed and who calls onboarding again gets
 `403 MEMBERSHIP_INACTIVE`, with the message "Your access to this business was

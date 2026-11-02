@@ -16,9 +16,10 @@ direct projection of what the running service accepts and returns.
 
 ## Authentication
 
-Every endpoint under `/v1` requires an `x-api-key` header, with one
-exception: the browser beacon for site events takes a publishable key in
-its query string. The playground accepts your key in the authorization slot.
+Every endpoint under `/v1` requires an `x-api-key` header, with two
+exceptions: the browser beacon for site events takes a publishable key in
+its query string, and `GET /v1/openapi.json` needs no auth. The playground
+accepts your key in the authorization slot.
 
 The end-user routes — the client's `/clients/me` and the supplier's
 `/suppliers/me` — also take the signed-in person's access token as

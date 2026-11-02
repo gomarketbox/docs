@@ -1154,7 +1154,7 @@ identical semantics — it plans every ACTIVE package the same way
 
 ## Path A: book explicit sessions (transcribe)
 
-The primary path — passing `{ slateId }` to `POST .../package-bookings` — is
+The primary path — passing `{ orderItemId, idempotencyKey, slateId }` to `POST .../package-bookings` — is
 what [Create a package booking](/guides/create-a-package-booking) walks
 through, and it's the one to reach for by default: the server re-resolves
 every session itself.
@@ -1166,7 +1166,8 @@ separately). Instead of `slateId`, you build a `sessions[]` array yourself
 by copying each slot from the slate response:
 
 ```ts
-// Map each resolved slot to a `sessions[]` entry — VERBATIM.
+// Map each resolved slot to a `sessions[]` entry — VERBATIM, except PHYSICAL
+// coordinates (see the warning below).
 function transcribeSlot(slot: PackageSlot) {
   return {
     supplierId: slot.supplierId,
@@ -1175,8 +1176,12 @@ function transcribeSlot(slot: PackageSlot) {
     bookingTz: slot.bookingTz,
     locationType: slot.locationType,
     locationId: slot.locationId,
-    latitude: slot.latitude,
-    longitude: slot.longitude,
+    // A PHYSICAL slot carries the Location's coordinates, but a PHYSICAL
+    // session must not send them — the booking derives them from the Location.
+    ...(slot.locationType !== 'PHYSICAL' && {
+      latitude: slot.latitude,
+      longitude: slot.longitude,
+    }),
     address: slot.address,
     services: [{ serviceId: slot.serviceId, offeringId: slot.offeringId }],
   };
@@ -1184,12 +1189,16 @@ function transcribeSlot(slot: PackageSlot) {
 
 const sessions = primarySlate.slots.map(transcribeSlot);
 
+// Mint the key ONCE per booking attempt, and resend this same key if you retry
+// the call. A new key on every call can't make a retry safe.
+const idempotencyKey = crypto.randomUUID();
+
 await fetch(`${MARKETBOX_API_URL}/v1/projects/${MARKETBOX_PROJECT_ID}/orders/${orderId}/package-bookings`, {
   method: 'POST',
   headers: { 'x-api-key': MARKETBOX_API_KEY, 'content-type': 'application/json' },
   body: JSON.stringify({
     orderItemId,
-    idempotencyKey: crypto.randomUUID(),
+    idempotencyKey,
     atomicity: 'all_or_nothing',
     sessions,
   }),
@@ -1204,6 +1213,11 @@ it yourself (e.g. re-resolving from raw `lat`/`lng`) can silently select the
 wrong zone and mis-place the booking by a meaningful distance. Take the slot
 fields as-is; only omit or reorder whole sessions, never recompute their
 contents.
+
+The one field to drop is `latitude`/`longitude` on a `PHYSICAL` slot. The
+slot carries the Location's coordinates, but a `PHYSICAL` session that sends
+them is a `400` with `PHYSICAL bookings derive coordinates from the Location
+— do not pass latitude/longitude`, and nothing is booked.
 </Warning>
 
 `slotId`, `sessionIndex`, `travelTimeMins`, `capacity`, and the deprecated
@@ -1259,7 +1273,7 @@ convert. See [Concurrency](/concepts/concurrency).
 | `/v1/projects/{projectId}/availability/package-options` | `POST` | `x-api-key` | Plan **every** ACTIVE package of a service in one call. Always `200` — an unbookable package carries its own `status` + `reason` instead of failing the request. Accepts the same cadence-relaxation fields. |
 | `/v1/projects/{projectId}/orders/{orderId}/package-bookings` | `POST` | `x-api-key` | Book via `sessions` (Path A), `slateId`, or `slotIds` — exactly one. |
 | `/v1/projects/{projectId}/holds` | `POST` | `x-api-key` | Hold supplier time — `intervals`, `slateId`, or `slotIds` (exactly one). Returns `reservationId` + `heldUntil`. See [Hold slots during checkout](/guides/hold-slots-for-checkout). |
-| `/v1/projects/{projectId}/holds/{reservationId}/convert` | `POST` | `x-api-key` | Convert a hold into confirmed bookings. Idempotent — safe for webhooks. |
+| `/v1/projects/{projectId}/holds/{reservationId}/convert` | `POST` | `x-api-key` | Convert a hold into confirmed bookings. Idempotent — safe to retry. |
 | `/v1/projects/{projectId}/holds/{reservationId}/release` | `POST` | `x-api-key` | Release a hold. Idempotent — always `200`. |
 
 ### Configuration
@@ -1283,7 +1297,7 @@ convert. See [Concurrency](/concepts/concurrency).
 | Provided more than one (or none) of `sessions` / `slateId` / `slotIds` on booking or holding | `VALIDATION_ERROR` | `400` | Provide exactly one. |
 | The referenced slate/slot doesn't exist, has no slots, or is past its 24-hour resolvable window (**holding only**) | `SLATE_NOT_FOUND` / `SLOT_NOT_FOUND` / `SUGGESTION_EXPIRED` | `409` | Rebuild the slate with `POST /availability/package-slate` and hold the fresh one. |
 | Chosen slot went stale between building a slate and booking it directly (`slateId`/`slotIds`, no hold) | `SLOT_NO_LONGER_BOOKABLE` | `409` | The response includes `freshSuggestions` — rebuild from it. Covered in depth in [Create a package booking](/guides/create-a-package-booking#reference). |
-| The time is claimed by a live hold — including your own, if you tried to book it directly instead of converting | `SLOT_HELD` | `409` | `conflicts[0].reservationId` names the hold. Convert it, or offer another slot. See [Hold slots during checkout](/guides/hold-slots-for-checkout#handling-a-held-slot). |
+| The time is claimed by a live hold — including your own, if you tried to book it directly instead of converting | `SLOT_HELD` | `409` | The first `conflicts[]` entry with `claimType: "HOLD"` names the hold in `reservationId`. Convert it, or offer another slot. See [Hold slots during checkout](/guides/hold-slots-for-checkout#handling-a-held-slot). |
 | The time is claimed by a confirmed booking | `SLOT_BOOKED` | `409` | Rebuild the slate — the supplier is taken. |
 | More than 15 sessions with `atomicity: "all_or_nothing"` (applies to direct booking and convert alike) | `PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC` | `422` | Use `atomicity: "best_effort"` (requires `suggestionConfig.allowPartialPackages`), or book/hold a smaller slate. |
 | `best_effort` requested but the project hasn't enabled it | `BEST_EFFORT_NOT_ENABLED` | `422` | Stay with `all_or_nothing` (≤15 sessions), or ask the project to enable `suggestionConfig.allowPartialPackages`. |

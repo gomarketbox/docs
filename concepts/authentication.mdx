@@ -64,11 +64,11 @@ metadata against it:
 | Field           | Meaning                                                                |
 | --------------- | ---------------------------------------------------------------------- |
 | `friendlyName`  | Human-readable label, shown only in the dashboard.                     |
-| `userId`        | The MarketBox user who owns the key. Becomes the `tenantId` on writes. |
+| `userId`        | The MarketBox user who owns the key. Becomes the `tenantId` on writes, shared by every key that user owns. |
 | `projectScope`  | Which projects the key may act on. See below.                          |
 | `capabilities`  | Which kinds of route the key may call. See [Capabilities](#capabilities). |
 | `createdAt`     | When the key was minted.                                               |
-| `lastUsedAt`    | Updated periodically as the key is used (not on every request).        |
+| `lastUsedAt`    | Not updated after the key is created today. Don't use it to find idle keys. |
 
 The raw key value is shown **once**, at create time. MarketBox stores only
 the hash — if you lose it, you must mint a new one.
@@ -157,9 +157,12 @@ creation. Rotation = mint + revoke.
 ## Tenancy
 
 Every write (`POST`, `PATCH`, `DELETE`) is tagged with the API key's
-owning `userId` as `tenantId` on the underlying record. This means the
-audit log shows **which key minted what** even if multiple keys share a
-project's scope.
+owning `userId` as `tenantId` on the underlying record. `tenantId` names
+the **user**, not the key: every key that user owns writes the same
+`tenantId`, so it can't tell you which of them made a change. MarketBox
+records the acting key separately, by its key id (`apiKeyId`), in its own
+audit trail. That id isn't returned on records. To tell your own callers
+apart, give each one its own key and log which key each call used.
 
 You don't pass `tenantId` yourself — MarketBox derives it from the key on
 the server.

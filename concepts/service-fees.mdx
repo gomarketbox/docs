@@ -151,19 +151,35 @@ says why in its `taxExemptReason` — see
 `PACKAGE` lines are taxed like any other line, so a taxable fee on a
 package-only order is taxed at the package's rate.
 
-### No matching active business model means no fee — and no error
+### No matching active business model means the line is refused
 
 An order line's business model is resolved **server-side**, from the line's
 `skuType`, against the service's `ServiceBusinessModel` records — you never
-name a business model directly when creating an order or an order item. If
-the service has no `ServiceBusinessModel` at all for that `skuType`, or the
-matching one has `active: false`, resolution returns nothing: the line
-carries no `businessModelId`, no fee is attached to it, and it doesn't
-contribute to any other line's fee basis either. The order is still created
-successfully. Business models have always been optional on a service, and
-adding fees to the model didn't change that — a service with no business
-model configured simply sells at its offering price with no fees layered on
-top.
+name a business model directly when creating an order or an order item.
+
+For a `SINGLE_SESSION`, `PACKAGE` or `SUBSCRIPTION` line, the service must
+have an **active** business model of a matching type (see the
+[mapping table](#which-business-model-to-put-the-fee-on)). If it has none, or
+every matching one has `active: false`, the service isn't sold that way. The
+line is refused with `422 SERVICE_NOT_SOLD_AS`, and nothing is written — not
+the order on `POST .../orders`, not the item on
+`POST .../orders/{orderId}/items`:
+
+```json
+{
+  "code": "SERVICE_NOT_SOLD_AS",
+  "message": "Service srv_01kx16ej8wfp0b4v3x1q7m2d5c is not sold as a single booking; it has no active SINGLE_BOOKING rate",
+  "statusCode": 422,
+  "requestId": "2b7e9c41-6d3a-4f85-a0c2-8e1f5b3d7a96"
+}
+```
+
+Activate a matching business model on the service, or sell the line under a
+`skuType` the service has an active model for.
+
+Only `MEMBERSHIP` and `DEPOSIT` lines resolve to no business model. They are
+created normally, carry no `businessModelId`, never carry a fee, and don't
+contribute to any other line's fee basis.
 
 ## Configuring fees
 
@@ -184,6 +200,7 @@ which sales the fee applies to**:
 "Falling back" means the exact match wins when it is active, and the fallback is
 used only when no exact match is active. So a `PACKAGE` line prefers your
 `PACKAGE` model and drops to `SCHEDULED_PACKAGE` if that is the only active one.
+When neither is active, the line is refused with `422 SERVICE_NOT_SOLD_AS`.
 
 <Warning>
 `MEMBERSHIP` and `DEPOSIT` have no business model counterpart at all, so fees can
@@ -231,7 +248,9 @@ entirely by `calculation`.
 
 ### The model must be active
 
-A fee on an inactive business model is stored but never charged. Activate with:
+A fee on an inactive business model is stored but never charged. If no other
+matching model on the service is active, the lines it would govern are refused
+with `422 SERVICE_NOT_SOLD_AS`. Activate with:
 
 ```json
 // POST .../business-models/{businessModelId}/status
@@ -243,12 +262,16 @@ reactivating restores the model with its fees intact.
 
 ## Why isn't my fee being charged?
 
-Fee resolution is deliberately silent: when no fee applies, the order still
-succeeds. That makes a misconfiguration look like nothing happening rather than
-like an error. Work through these in order:
+If the order was refused with `422 SERVICE_NOT_SOLD_AS`, the service has no
+active business model for the line's `skuType` — see
+[above](#no-matching-active-business-model-means-the-line-is-refused). Once an
+order is created, a missing fee is silent: the order still succeeds, so a
+misconfiguration looks like nothing happening rather than like an error. Work
+through these in order:
 
-1. **Is the business model `active`?** An inactive model resolves to nothing.
-   Check with `GET .../business-models`.
+1. **Is the business model `active`?** An inactive model never charges its
+   fees. If another matching model is active (a fallback type), that one
+   governs the line instead. Check with `GET .../business-models`.
 2. **Does the model's `type` govern the `skuType` you are selling?** See the
    mapping table above. A fee on a `SINGLE_BOOKING` model does nothing for a
    `PACKAGE` line.

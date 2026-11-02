@@ -9,7 +9,7 @@ email that exists, who receives it, and which parts you can configure.
 
 Emails are sent from MarketBox's infrastructure under your project's name. Nothing here is a
 marketing surface: there is no list, no unsubscribe funnel, and no campaign. Every message is tied
-to one booking or one invitation.
+to one booking, one order or one invitation.
 
 ## The full set
 
@@ -32,8 +32,8 @@ the client's.
 no booking exists yet, so there is nobody to confirm anything to. `POST /holds/{reservationId}/convert`
 is the moment the booking is created, so that is when the client confirmation and the supplier notice
 go out, along with everything scheduled below. If your checkout holds time while the client pays, the
-client is mailed when your payment webhook converts — not when they reach the payment page. A
-duplicate webhook delivery that replays the same bookings does not re-send them. See
+client is mailed when you convert the hold — not when they reach the payment page. A
+repeated convert that replays the same bookings does not re-send them. See
 [Hold slots during checkout](/guides/hold-slots-for-checkout).
 
 ### Before it happens
@@ -52,9 +52,21 @@ Suppliers with nothing booked get nothing.
 | --- | --- | --- |
 | Booking updated | client, current supplier, previously assigned supplier, project admins | on a change to time, location or supplier |
 | Booking cancelled | client, supplier, project admins | on cancellation |
+| Order cancelled | the client | when an order is cancelled, listing every session it cancelled |
+| Order cancelled | each supplier with a cancelled session | the same moment, listing only that supplier's sessions |
+| Your booking needs a new time | the client | when the business offers new times for a booking the supplier can't make |
 
 Cancelling a booking also removes every email still scheduled for it — no reminder, no rating
 request afterwards.
+
+**Cancelling an order sends one email per person, not one per booking.** The order's remaining
+sessions are cancelled with it, and the client gets a single message listing all of them. Each
+supplier gets a single message listing only their own. Project admins are not mailed. A cancel that
+finds nothing left to cancel sends nothing.
+
+The new-time offer lists the options the business proposed, each linking to the client's booking
+with that option selected. Only the client receives it. The supplier hears about the move through
+the usual booking-updated email once the client picks a time.
 
 ### After it happens
 

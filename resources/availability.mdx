@@ -99,6 +99,14 @@ No matching suppliers returns the same envelope with empty
 `timeSlots` / `openSlots` and `errors: []`.
 
 <Warning>
+  **A failed search is still a `200`.** The engine reports failures as strings
+  in `errors[]`, not as an HTTP error. Empty slots with a non-empty `errors`
+  means the search broke, not that nobody is free. Check `errors` before you
+  tell a client there is no availability. `/availability/suppliers` behaves
+  the same way.
+</Warning>
+
+<Warning>
   **Check `engineEnabled` before you say nobody is free.** It is `false` when
   the project has switched its scheduling engine off. The engine then doesn't
   run, so `timeSlots` is empty because it wasn't computed, not because nobody
@@ -370,6 +378,10 @@ whole request.
 | `404`  | `package-options` — the service doesn't exist in this project. `package-slate` — the package, or the credit's order item, doesn't exist. |
 | `409`  | `package-slate` only — the credit can't be planned: no sessions left (`ORDER_ITEM_QUANTITY_UNAVAILABLE`), expired (`PACKAGE_EXPIRED`), or on a cancelled order (`ORDER_CANCELLED`). |
 | `422`  | `package-slate` only — nothing bookable: no `primarySlate`, no `partial`, and no `cadenceAlternatives`. The `code` is `NO_COMPLETE_SLATE` or `NO_AVAILABILITY`. |
+
+`/search`, `/suppliers` and `/time-slots` report engine failures differently:
+inside a `200`, as strings in the body's `errors[]`. An empty result with a
+non-empty `errors` is a broken search, not an empty calendar.
 
 See [Errors](/concepts/errors) for the full error envelope.
 

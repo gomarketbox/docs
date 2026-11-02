@@ -264,22 +264,32 @@ immediately with [Create a single booking](/guides/create-a-single-booking) —
 the slot gives you everything the booking's timing needs:
 
 ```ts
-// supplierId from the card; slot from the day column; timezone from the page.
+// supplier from the card; slot from the day column.
+// The supplier's own travel zone (stz_…) — see "Choose the location and zone" below.
+const zone = supplier.locations.find(
+  (l) => l.locationType === 'TRAVEL_ZONE' && l.locationId.startsWith('stz_'),
+);
+// A supplier whose only zone is a project TRAVEL_ZONE location (loc_…) has no
+// stz_ entry. Don't book them in-home from this card.
+if (!zone) throw new Error('Supplier has no travel zone of their own');
+
 await fetch(`${MARKETBOX_API_URL}/v1/projects/${MARKETBOX_PROJECT_ID}/bookings`, {
   method: 'POST',
   headers: { 'x-api-key': MARKETBOX_API_KEY, 'content-type': 'application/json' },
   body: JSON.stringify({
-    clientId,
-    supplierId,                       // data[].supplier.supplierId
+    clientId,                         // resolved server-side — see Create a single booking
+    supplierId: supplier.supplierId,  // data[].supplier.supplierId
     bookingStartUtc: slot.startUtc,   // the UTC anchors, not the *Local strings
     bookingEndUtc: slot.endUtc,
-    bookingTz: page.timezone,
-    // Location: reuse the SAME location you searched with —
-    // locationId for a stored venue, or lat/lng + a structured address for TRAVEL_ZONE.
+    // The session's home zone — NOT page.timezone, which is only the zone the
+    // *Local strings were rendered in. In-home: the supplier's profile zone,
+    // else your project's default zone.
+    bookingTz: supplier.timezone ?? projectDefaultTimezone,
+    // Location: reuse the SAME place you searched with.
     locationType: 'TRAVEL_ZONE',
-    latitude: 43.6532,
+    latitude: 43.6532,                // the lat/lng you searched with
     longitude: -79.3832,
-    locationId: 'stz_01kv60qgs4e4nbjhzradnqtj0h', // the supplier's travel-zone id
+    locationId: zone.locationId,      // the supplier's travel-zone id (stz_…)
     address: { /* … see Create a single booking */ },
     capacity: 1,
     services: [{
@@ -293,6 +303,19 @@ await fetch(`${MARKETBOX_API_URL}/v1/projects/${MARKETBOX_PROJECT_ID}/bookings`,
   }),
 });
 ```
+
+**Choose the location and zone.** A slot carries times only — no
+`locationId` and no zone. Take them from how you searched and from the
+supplier on the card:
+
+| You searched with | `locationType` | `locationId` | `bookingTz` |
+| --- | --- | --- | --- |
+| `lat` + `lng` (in-home) | `TRAVEL_ZONE` | The supplier's own travel zone: the `supplier.locations[]` entry with `locationType: "TRAVEL_ZONE"` and an `stz_` id. If there is more than one, take the one that covers the client's address. | `supplier.timezone`, else the project's default zone |
+| `locationId` (a venue) | `PHYSICAL` | The same `loc_` id you searched with. Send no `latitude`/`longitude`. | The Location's `timezone` (`GET /locations/{locationId}`), else `supplier.timezone`, else the project's default zone |
+
+`page.timezone` is the zone you asked to *see* the slots in — usually the
+viewer's. Don't send it as `bookingTz`: a viewer in another zone would
+stamp the booking's local date and time in the wrong zone.
 
 <Warning>
 **A search result is not a reservation.** These are open slots — another

@@ -68,8 +68,14 @@ your own client's access token now, and nothing changes for you when it is
 switched on.
 </Warning>
 
-A request with the API key but no token is a `401`. **Treat every `401` as
-"sign in again"**, whatever its `code`.
+A request with the API key but no token is a `401`. A request with no API key,
+or with a publishable key in `x-api-key`, is a `401` too. **Read the `message`
+before you sign the supplier out.** "API key not provided" and "A publishable
+key cannot be used as an API key" mean your BFF sent the wrong key. Signing in
+again can't fix that, and a portal that tries loops. Sign the supplier in again
+only on a `401 HTTP_ERROR`. Treat any `401 UNAUTHORIZED` as a bug in your BFF
+and log it. See
+[End-user authentication](/concepts/end-user-authentication).
 
 ## Who may call it
 
@@ -113,12 +119,16 @@ Every refusal uses the standard [error envelope](/concepts/errors).
 
 | Status and `code` | What it means |
 | --- | --- |
+| `401 UNAUTHORIZED` | "API key not provided", or "A publishable key cannot be used as an API key". Your BFF sent no key, or a publishable one. Fix the BFF; don't sign the supplier out. |
+| `403 FORBIDDEN` | "API key not recognized". The `x-api-key` value isn't a MarketBox API key. |
+| `403 CAPABILITY_NOT_GRANTED` | Your API key lacks Standard API access. Checked before the token. |
 | `401 HTTP_ERROR` | No token, a malformed `Authorization` header, or a token that is invalid or expired. |
 | `401 UNAUTHORIZED` | A token that names no user — and, once enforced, a token from another client. |
-| `403 CAPABILITY_NOT_GRANTED` | Your API key lacks Standard API access. Checked before the token. |
-| `403 FORBIDDEN` | The key can't use this project, or the person isn't an `ACTIVE` member holding the route's permission. |
+| `403 FORBIDDEN` | "User account not found. Complete registration first." The token is valid, but the person hasn't finished signing up to MarketBox. |
+| `403 FORBIDDEN` | The key can't use this project, or the person isn't an `ACTIVE` member holding the route's permission. An invited supplier who hasn't accepted yet gets "No active membership on this project". |
 | `403 ACTING_ROLE_NOT_HELD` | Your request sent `X-MB-Acting-Role` naming a role the person doesn't hold. A portal doesn't need that header. |
-| `404 NOT_FOUND` | No such project — or the person passed every check but isn't a supplier in this project. |
+| `404 NOT_FOUND` | No such project. |
+| `404 NOT_FOUND` | "No supplier record for current user". The person passed every check, but no supplier record in this project is linked to their sign-in — for example, a member who was invited without a supplier record. |
 
 A person who isn't an active member sees this:
 
@@ -144,7 +154,9 @@ A member whose roles lack the permission sees the same `code` with
   keeps its length, and its local times are worked out again in its own zone.
 - **Hours and blocked time are wall-clock rules:** `HH:MM` times and
   `YYYY-MM-DD` dates in the row's `timezone`, with a weekly `rrule`. Omit
-  `timezone` to use the supplier's profile zone.
+  `timezone` on create to use the supplier's profile zone, or the project's
+  default zone when the profile has none. When neither exists, the create is a
+  `400 BAD_REQUEST`. An update keeps the row's stored zone.
 - **Insights** are given in the supplier's home zone.
 - **Query windows** on bookings (`startDate`, `endDate`) are UTC instants.
 
@@ -169,15 +181,18 @@ address, `active`, timezone, service and skill ids, languages and locales.
 ### Edit the profile
 
 1. `GET /suppliers/me` to fill the form. For the pickers, call
-   `GET /v1/projects/{projectId}/services` and
+   `GET /v1/projects/{projectId}/services?status=LIVE` and
    [`GET /v1/projects/{projectId}/skills`](/resources/locations#skills) with the
-   API key alone.
+   API key alone. Without `status=LIVE`, the service list also holds `DRAFT`
+   and `INACTIVE` services, which clients can't book.
 2. `PATCH /suppliers/me` with only the fields that changed. `200` returns the
    updated profile.
 
 A supplier may change `firstName`, `lastName`, `phone`, the address fields,
 `timezone`, `bio`, `languages`, `serviceIds` and `skillIds`. `serviceIds` and
-`skillIds` replace the whole set when sent.
+`skillIds` replace the whole set when sent. Take every id from the pickers:
+`serviceIds` from `GET /services?status=LIVE`, and `skillIds` from
+`GET /skills`. Never type or invent an id.
 
 ```json
 // PATCH /v1/projects/{projectId}/suppliers/me
@@ -329,9 +344,10 @@ A move changes the time only. The length, supplier, location and zone stay.
 | `409 NOTICE_WINDOW_PASSED` | Too close to the start to change. |
 | `409 VERSION_CONFLICT` | The booking changed since you read it. Re-read and try again. |
 | `422 NEW_START_INSIDE_NOTICE_WINDOW` | Move only: the new time is itself inside the notice window. |
-| `409 SLOT_UNAVAILABLE` | Move only: the new time is outside working hours, in blocked time, or overlaps another booking. |
+| `409 SLOT_UNAVAILABLE` | Move only: the new time is outside working hours, in blocked time, or overlaps another booking or a hold. When the availability check finds the cause, the `message` names it — for example "That time is not available: it is during time the supplier has blocked off." Time a hold has taken, or a booking made a moment earlier, reads "That time is not available. Choose another." |
 | `409 SLOT_UNVERIFIABLE` | Move only: availability couldn't be checked, so nothing changed. |
 | `400 VALIDATION_ERROR` | An unknown `reasonCode`, or a `startTime` that isn't an instant. |
+| `400 BAD_REQUEST` | Cancel: the booking's status changed while the cancel ran, so the change is no longer allowed. Move: the booking's stored zone isn't a valid IANA zone. Re-read the booking. |
 
 For example, a move on a service that doesn't allow it:
 
@@ -360,9 +376,12 @@ for the others.
 
 ### Set working hours
 
-1. `GET /suppliers/me/locations` for the venue picker, and
-   `GET /suppliers/me/travel-zones` for the areas.
-2. Create the schedule:
+1. `GET /suppliers/me/locations` for the venue picker. For the area picker,
+   `GET /suppliers/me/travel-zones` lists the supplier's own travel zones, and
+   the key-only `GET /v1/projects/{projectId}/locations?locationType=TRAVEL_ZONE`
+   lists the project's. `GET /suppliers/me/locations` never returns
+   `TRAVEL_ZONE` locations, so a portal needs that key-only call too.
+2. Create the schedule. This one is for a venue:
 
    ```json
    // POST /v1/projects/{projectId}/suppliers/me/schedules
@@ -382,25 +401,130 @@ for the others.
    ```
 
    Name each venue with both its `locationId` and its `locationType` from
-   `GET /suppliers/me/locations`. For an area, send `travelZoneRef` instead of,
-   or as well as, `locationRefs`. To limit the schedule to some offerings, send
-   `appliesToAllOfferings: false` and their `serviceOfferingIds`.
+   `GET /suppliers/me/locations`.
+
+   For an area, send `travelZoneRef` instead of, or as well as,
+   `locationRefs`. This schedule covers one of the supplier's own zones, for
+   one offering only:
+
+   ```json
+   // POST /v1/projects/{projectId}/suppliers/me/schedules
+   {
+     "startDate": "2026-11-03",
+     "endDate": "2027-06-30",
+     "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=TU,TH",
+     "exdates": ["2026-12-24"],
+     "weeklyTimeRanges": [
+       { "dayOfWeek": "TU", "startTime": "08:00", "endTime": "14:00", "crossesMidnight": false, "sortOrder": 0 },
+       { "dayOfWeek": "TH", "startTime": "08:00", "endTime": "14:00", "crossesMidnight": false, "sortOrder": 0 }
+     ],
+     "appliesToAllOfferings": false,
+     "serviceOfferingIds": ["off_01kv60qge5eh59ap0gw0pqrrys"],
+     "travelZoneRef": {
+       "travelZoneSource": "SUPPLIER_TRAVEL_ZONE",
+       "supplierTravelZoneId": "stz_01kv60qgnef2kt3pvqgwmkbzfr"
+     }
+   }
+   ```
+
+   `travelZoneRef` names one zone, in one of two shapes:
+
+   | Zone | Where its id comes from | `travelZoneRef` |
+   | --- | --- | --- |
+   | The supplier's own | `GET /suppliers/me/travel-zones` | `{ "travelZoneSource": "SUPPLIER_TRAVEL_ZONE", "supplierTravelZoneId": "stz_…" }` |
+   | The project's | `GET /locations?locationType=TRAVEL_ZONE`, with the API key alone | `{ "travelZoneSource": "PROJECT_LOCATION", "travelZoneLocationId": "loc_…" }` |
+
+   **A travel zone on its own makes no one bookable.** The supplier is offered
+   in an area only once an `ACTIVE` schedule references its zone.
 3. To change it, `PATCH /schedules/{scheduleId}` with the changed fields and the
    row's current `version`.
+
+Before a schedule is saved, the API checks it. Each check below that fails is a
+`400`:
+
+- `rrule` is `FREQ=WEEKLY`, with no `DTSTART`. `INTERVAL`, `BYDAY` and `UNTIL`
+  are read. With no `BYDAY`, every day is allowed, so each range applies on
+  its own `dayOfWeek`. To skip single dates, such as a public holiday, list
+  them in `exdates` as `YYYY-MM-DD`.
+- In each range, `startTime` and `endTime` differ, and `crossesMidnight` is
+  `true` exactly when `startTime` is later than `endTime`: a range that ends
+  the next day.
+- `appliesToAllOfferings: true` takes no `serviceOfferingIds`.
+  `appliesToAllOfferings: false` needs at least one.
+- Each of `serviceOfferingIds` is an `ACTIVE` offering of one of the
+  supplier's own services, the ones in their profile `serviceIds`. Anything
+  else is `400 BAD_REQUEST` naming the ids, such as
+  "Offerings not active for this supplier: off_01kv60qge5eh59ap0gw0pqrrys".
+- A schedule has at least one entry in `locationRefs`, a `travelZoneRef`, or
+  both.
+- Each venue and zone exists in the project, with the type you named.
 
 Two `409 CONFLICT` cases to handle:
 
 - An `ACTIVE` schedule may not overlap another `ACTIVE` one.
 - A stale `version` is refused. Re-read the row and try again.
 
-Blocked time has the same shape, with `allDay` or `timeRanges`, and `notes`.
+Deleting a schedule whose `travelZoneRef` names one of the supplier's own zones
+(`SUPPLIER_TRAVEL_ZONE`) soft-deletes that zone too.
+
+### Block time off
+
+Blocked time has the same date, `rrule` and `exdates` rules as a schedule. In
+place of `weeklyTimeRanges` it takes `allDay` or `timeRanges`, plus an optional
+`notes`. A range in `timeRanges` with no `dayOfWeek` applies on every day the
+rule allows.
+
+A single day off still needs a weekly rule. Give the day as both `startDate`
+and `endDate`, and leave out `BYDAY`:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/blocked-times
+{
+  "startDate": "2026-12-24",
+  "endDate": "2026-12-24",
+  "rrule": "FREQ=WEEKLY;INTERVAL=1",
+  "allDay": true,
+  "notes": "Vacation"
+}
+```
+
+`allDay: true` takes an empty or absent `timeRanges`. `allDay: false` needs at
+least one range. A lunch break every weekday, except on one holiday:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/blocked-times
+{
+  "startDate": "2026-11-02",
+  "endDate": "2027-06-30",
+  "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR",
+  "exdates": ["2026-12-25"],
+  "allDay": false,
+  "timeRanges": [
+    { "startTime": "12:00", "endTime": "13:00", "crossesMidnight": false, "sortOrder": 0 }
+  ],
+  "notes": "Lunch"
+}
+```
+
+Any other `FREQ`, or a rule with `DTSTART`, is refused:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "rrule: rrule must be FREQ=WEEKLY without DTSTART (e.g. FREQ=WEEKLY;INTERVAL=1;BYDAY=MO)",
+  "statusCode": 400,
+  "requestId": "9d2e6b4a-3c1f-4e87-a5b0-7f1c8d3e2a96"
+}
+```
 
 ### After a timezone change
 
 When a supplier changes their profile `timezone`, their rows stay in the old
 zone. `POST /availability-timezone/apply-profile` moves every schedule and
 blocked time into the profile zone, keeping wall-clock times. It answers with
-the zone and how many rows it rewrote. You can't choose the zone.
+the zone and how many rows it rewrote. You can't choose the zone. When the
+profile has no zone, it uses the project's default. When neither has one, it
+answers `400 BAD_REQUEST` and changes nothing.
 
 ## Travel zones
 
@@ -426,9 +550,13 @@ A travel zone is either a circle around a centre or a drawn area:
 For a `DRAWN` zone, send `travelRegions` (a GeoJSON `Polygon` or
 `MultiPolygon`) instead of the distance.
 
+A zone does nothing until a schedule names it in `travelZoneRef`. See
+[Set working hours](#set-working-hours).
+
 To change a zone, `PATCH` it with the changes and its current `version`. A stale
-`version` — on `PATCH` or `DELETE` — is `409 CONFLICT`: re-read the zone and
-try again.
+`version` is `409 CONFLICT`: re-read the zone and try again. `DELETE` takes no
+`version`. Its `409 CONFLICT` means another write to the zone landed at the same
+moment: re-read the zone, then decide again.
 
 **A geometry change moves your schedules' versions.** When the geometry changes,
 every schedule that uses the zone is recomputed and rewritten. The response
@@ -463,13 +591,17 @@ locations too, so a booking at a venue that has since closed still resolves.
 1. `GET /demand?area=zone&days=30`. `area` is `zone` (the default) or `wider`,
    the zone plus a 15-minute drive. `days` is `30` (the default), `90` or `180`.
    `state` is `ok`, `not_enough_data` (fewer than 20 bookings, and no grid) or
-   `no_area`.
+   `no_area`. Each grid covers 06:00 to 22:00 local, in the zone named by
+   `window.zone`: 7 rows, where day index 0 is Monday, by 16 hourly columns,
+   where index 0 is 06:00.
 2. To hide a suggestion, `POST /demand/suggestions/{key}/dismiss` with its
    `key` from the response — for example `open:WED:14:00-16:00`. `DELETE` the
    same path to show it again. Both are idempotent.
 3. `GET /search-insights?days=28`. `days` is `7`, `28` (the default) or `90`.
    For a custom range, send `from` and `to` (`YYYY-MM-DD`, at most 365 days)
-   instead.
+   instead. `state` is `ok`, or `nothing_yet` when no counted search involved
+   the supplier in this window or the one before. A `nothing_yet` response has
+   no tiles, missed searches or breakdowns: show an empty state, not zeros.
 
 The business switches each insight on per project. While a switch is off, its
 routes answer:
@@ -538,6 +670,10 @@ booking.
 | `LESSON_MOVED` | "Booking moved" | `{ "kind": "booking", "bookingId" }` | The booking's detail page |
 | `LESSON_CANCELLED` | "Booking cancelled" | `{ "kind": "booking", "bookingId" }` | The booking's detail page |
 | `MY_REPORTS_OVERDUE` | "N bookings need your report" | `{ "kind": "myAppointments", "filter": "awaiting" }` | Your bookings list, filtered to those awaiting a report |
+
+The `kind` and `target.kind` enums also list client and staff values, which a
+supplier inbox doesn't receive. Skip any `kind` or `target` your portal doesn't
+map, rather than failing on it.
 
 The `payload` holds what the copy needs: `clientName` (shown as the service's
 participant settings allow, for example "Jordan L."), `serviceName`, and the
@@ -642,4 +778,5 @@ Key-only routes the portal also uses, with the API key alone:
 | --- | --- |
 | `/v1/projects/{projectId}/services` | `GET` |
 | `/v1/projects/{projectId}/skills` | `GET` |
+| `/v1/projects/{projectId}/locations` | `GET` |
 | `/v1/projects/{projectId}/locations/{locationId}` | `GET` |

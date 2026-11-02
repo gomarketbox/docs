@@ -107,10 +107,21 @@ flowchart LR
    `slots[]`. To plan what is left on a credit the client already owns, send
    its `orderId` and `orderItemId` instead of `packageId`.
 2. **Book it by id.** `POST /orders/{orderId}/package-bookings` with just
-   `{ orderItemId, slateId }` — the server re-resolves every session's
-   supplier, time, and location itself (including filling in the location
-   for travel-zone bookings) and creates all N bookings in one atomic
-   transaction.
+   `{ orderItemId, idempotencyKey, slateId }` — the server re-resolves every
+   session's supplier, time, and location itself (including filling in the
+   location for travel-zone bookings) and creates all N bookings in one atomic
+   transaction. `idempotencyKey` is required: mint it once per booking
+   attempt and resend the same key on a retry, so a retry replays the first
+   result instead of booking twice.
+
+<Note>
+The atomic write (`atomicity: "all_or_nothing"`, the default) books at most
+15 sessions in one call. A larger slate is refused with
+`422 PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC`, and nothing is booked. Book it in
+smaller calls with `slotIds`, or send `atomicity: "best_effort"` if your
+project has partial package booking enabled — otherwise that is
+`422 BEST_EFFORT_NOT_ENABLED`.
+</Note>
 
 You never have to copy times or locations out of the slate response by
 hand — sending the `slateId` back is enough. (An older, more manual path

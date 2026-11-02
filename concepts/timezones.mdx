@@ -44,9 +44,9 @@ When you create or reschedule a booking, you supply only the UTC
 instants and `bookingTz`. The server computes the four local fields
 using `bookingTz` as the source of truth and writes them alongside.
 
-Attempting to send the local fields in a request body is silently
-ignored on create and rejected as a validation error on patch — you
-**cannot** override what the server derives.
+Local fields you send in a request body are silently ignored, on create
+and on `PATCH` alike. The request succeeds, and the server's derived
+values win — you **cannot** override what the server derives.
 
 If you change `bookingTz` on a reschedule, the local fields are
 re-derived automatically.
@@ -58,6 +58,11 @@ List endpoints that filter on time accept **UTC bounds only**:
 ```
 GET /v1/projects/{projectId}/bookings?startDate=2026-06-01T00:00:00Z&endDate=2026-06-02T00:00:00Z
 ```
+
+`startDate` and `endDate` must be full ISO 8601 datetimes ending in `Z`.
+A bare date (`2026-06-01`) or a datetime with an offset
+(`2026-06-01T00:00:00-04:00`) is a `400 VALIDATION_ERROR`. Convert to UTC
+first — `Date.prototype.toISOString()` always produces the right form.
 
 There is no `localDate` filter. If you want "all bookings on Tuesday in
 New York," compute the UTC window yourself:
