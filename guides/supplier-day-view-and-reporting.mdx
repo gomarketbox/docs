@@ -1,0 +1,404 @@
+---
+title: Supplier day view and attendance reports
+description: Build a supplier's agenda from their bookings, show only the actions the server allows, and file the attendance report that settles each booking.
+---
+
+A supplier's day in your portal has two halves. Before a booking, they need
+an agenda: who, what, where, and whether they can still move or cancel it.
+After a booking ends, they file an attendance report, and that report settles
+it.
+
+This guide builds both on the **supplier plane**. It builds on
+[Build a supplier portal](/guides/build-a-supplier-portal), which covers
+sign-in, the two credentials, and the refusals every supplier-plane route
+shares. Paths are relative to `/v1/projects/{projectId}/suppliers/me`.
+
+## The day view
+
+### Pick the window
+
+`GET /suppliers/me/bookings` returns the bookings that **start** between
+`startDate` and `endDate`. Both are UTC instants, and **both ends are
+included**. A supplier thinks in local days, so turn their local midnight into
+an instant first, and end the window one millisecond before the next local
+midnight:
+
+| The supplier's day | `startDate` | `endDate` |
+| --- | --- | --- |
+| Tuesday 2026-11-03 in `America/Toronto` (UTC−5) | `2026-11-03T05:00:00.000Z` | `2026-11-04T04:59:59.999Z` |
+| Sunday 2026-11-01, the day clocks go back | `2026-11-01T04:00:00.000Z` | `2026-11-02T04:59:59.999Z` |
+
+- Work the bounds out from local midnight on each date, not by adding 24
+  hours: a daylight-saving day is 23 or 25 hours long. Take the zone from the
+  supplier's profile `timezone`.
+- **Always send milliseconds**, as `.000Z`. The bounds are compared with each
+  booking's start as text, so `2026-11-03T05:00:00Z` sorts after
+  `2026-11-03T05:00:00.000Z`, and a booking that starts exactly at midnight is
+  left out.
+- Never send `endDate` before `startDate`.
+
+A booking that started the evening before and runs past midnight isn't in
+that day's list. Start the window a few hours earlier if the supplier works
+overnight.
+
+### List the bookings
+
+```
+GET /v1/projects/{projectId}/suppliers/me/bookings?startDate=2026-11-03T05:00:00.000Z&endDate=2026-11-04T04:59:59.999Z&expand=client,services,location,participants,myReport
+```
+
+The list isn't paginated: every booking in the window comes back in one
+response. Keep the window to a day or a week.
+
+`expand` adds one key per value. Ask only for what the screen shows:
+
+| `expand` value | Adds | Notes |
+| --- | --- | --- |
+| `client` | `client`: `displayName`, plus `email` and `phone` | Shown as the service's settings let suppliers see clients: for example `"Jordan L."`, and no email or phone. `null` when the client's profile can't be read. |
+| `services` | `services`: `name` (the first service) and `count` | |
+| `package` | `package`: `{ credit: "HELD", position, total }` or `{ credit: "RETURNED", total }` | For "Session 3 of 10". `null` when the booking isn't from a package. |
+| `location` | `location`: `name` and `addressOneLine` | For `PHYSICAL` bookings at a venue. |
+| `participants` | `participants`: `labels` and `count` | `labels: null` means show a placeholder from `count`, not an empty list. |
+| `myReport` | `myReport`: `reportable`, `filed`, `attended` | The supplier's own attendance report. See [After the booking ends](#after-the-booking-ends). |
+
+**Every value except `client` needs both dates, at most 93 days apart.**
+`client` alone works without a window. Each rule is a `400 BAD_REQUEST`
+whose `message` names the problem:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "expand=services,location requires both startDate and endDate",
+  "statusCode": 400,
+  "requestId": "5f2a8c1e-7d3b-4e96-a0b4-2c9e6f1d8a37"
+}
+```
+
+| `message` | Cause |
+| --- | --- |
+| `expand=… requires both startDate and endDate` | A per-booking expansion with a missing date. |
+| `expand=… allows a startDate–endDate window of at most 93 days` | The window is too long. |
+| `endDate must not be before startDate` | The dates are swapped, on a request with a per-booking `expand`. |
+| `Unknown expand value 'servcies'. Allowed: client, services, package, location, participants, myReport` | A typo. Nothing is dropped silently. |
+
+The list holds every status, `CANCELLED` included. Send `status` to narrow it
+to one status, or show cancelled rows struck through so the supplier sees what
+changed.
+
+A row, trimmed:
+
+```json
+{
+  "data": [
+    {
+      "bookingId": "bk_01kx16f2a0e5x9jv6r0c1qs7pm",
+      "status": "SCHEDULED",
+      "bookingStartUtc": "2026-11-03T15:00:00.000Z",
+      "bookingEndUtc": "2026-11-03T16:00:00.000Z",
+      "bookingTz": "America/Toronto",
+      "bookingLocalDate": "2026-11-03",
+      "bookingLocalStartTime": "10:00:00",
+      "bookingLocalEndTime": "11:00:00",
+      "client": { "displayName": "Jordan L." },
+      "services": { "name": "Private swim lesson", "count": 1 },
+      "location": { "name": "Riverdale Pool", "addressOneLine": "550 Broadview Ave, Toronto" },
+      "participants": { "labels": ["Jordan L."], "count": 1 },
+      "myReport": { "reportable": false, "filed": false, "attended": null },
+      "viewerActions": {
+        "canCancel": false,
+        "canReschedule": true,
+        "blockedReason": "Cancelling closes 24 h before the session."
+      }
+    }
+  ]
+}
+```
+
+Show each booking in its own `bookingTz`, labelled. For the full detail, with
+service lines and participants, call `GET /suppliers/me/bookings/{bookingId}`. Booking notes
+and the client's own report are never returned to a supplier.
+
+### Show only the actions the server allows
+
+Every row carries `viewerActions`, with or without `expand`. The server works
+it out from the service's settings, the booking's status and its own clock.
+Render from it; don't re-derive the rules in your portal, or from the
+supplier's device clock.
+
+| `viewerActions` | Show |
+| --- | --- |
+| `canCancel: true` | A **Cancel** button. |
+| `canReschedule: true` | A **Move** button. |
+| `false` with a `blockedReason` | The button disabled, with the reason. The notice window has closed. |
+| `false` with no `blockedReason` | No button. The service doesn't let suppliers do this, or the booking isn't `SCHEDULED`. Say the business handles changes. |
+
+`blockedReason` is ready to show. It takes one of these forms, with the
+service's own notice windows in hours:
+
+- `Changes close 24 h before the session.`
+- `Cancelling closes 24 h before the session.`
+- `Rescheduling closes 24 h before the session.`
+- `Cancelling closes 24 h and rescheduling 12 h before the session.`
+
+It appears only when a notice window has closed.
+
+`viewerActions` is true **when you read it**. A notice window can close between
+the read and the click, so the action can still be refused, with
+`409 NOTICE_WINDOW_PASSED`. Re-read the booking and redraw. For the requests
+and every refusal, see
+[Cancel and reschedule](/guides/build-a-supplier-portal#cancel-and-reschedule).
+
+### Keep the agenda current
+
+The public API sends no webhooks. To catch a booking that is added, moved or
+cancelled, poll:
+
+- `GET /suppliers/me/alerts/summary` for the badge, **no more often than every
+  60 seconds**. It carries counts only.
+- `GET /suppliers/me/alerts?filter=unread` when the count goes up. A
+  `LESSON_ASSIGNED`, `LESSON_MOVED` or `LESSON_CANCELLED` alert names the
+  booking in `target.bookingId`. Re-read that booking.
+- `GET /suppliers/me/bookings` for the window on screen, when the supplier
+  opens or refreshes it.
+
+See [Alerts](/guides/build-a-supplier-portal#alerts) and
+[Tracking state without webhooks](/concepts/tracking-state-without-webhooks).
+
+## After the booking ends
+
+### When a report can be filed
+
+A supplier can report once the booking **has ended**, until it is settled.
+That means:
+
+- `SCHEDULED` or `STARTED`, once `bookingEndUtc` has passed;
+- `AWAITING_CONFIRMATION`, at any time.
+
+Don't wait for `AWAITING_CONFIRMATION`. An hourly sweep moves an ended booking
+there, so it can still read `SCHEDULED` for up to an hour after it ends. A
+report in that gap settles it straight away. `myReport.reportable` in the
+list, and `reportable` below, already follow these rules. Use them to show the
+report button.
+
+### Read the report view
+
+```
+GET /v1/projects/{projectId}/suppliers/me/bookings/bk_01kx16f2a0e5x9jv6r0c1qs7pm/reports
+```
+
+Trimmed:
+
+```json
+{
+  "data": {
+    "reporterRole": "SUPPLIER",
+    "reportable": true,
+    "ifAttended": { "settlesTo": "COMPLETED" },
+    "ifNotAttended": { "settlesTo": "SUPPLIER_NO_SHOW" },
+    "report": null
+  }
+}
+```
+
+- `reportable` says whether a report is taken now, by the server's clock.
+- `ifAttended` and `ifNotAttended` say what each answer would do. Use
+  `settlesTo` for the confirm step: "This marks the booking completed." Each
+  also carries a `consequences` key, which names the MarketBox dashboard's own
+  copy. Don't build on it. Both are `null` when the booking isn't reportable.
+- `report` is the supplier's report on file, or `null`.
+
+**`ifAttended` is judged from the booking alone.** It never reads the client's
+report. So an `ifAttended` of `COMPLETED` can still end `DISPUTED`. Don't
+promise the supplier "completed" before they file.
+
+### File the report
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/bookings/bk_01kx16f2a0e5x9jv6r0c1qs7pm/reports
+{
+  "attended": true,
+  "note": "Lesson ran to the full hour."
+}
+```
+
+`attended` says whether **the supplier** attended. It's a self-report: it
+says nothing about the client. `note` is optional, at most 1,000 characters,
+and is kept with the report. The body takes no ids: the supplier is the one
+the token belongs to.
+
+The report settles the booking in the same write:
+
+| The supplier sends | The client had already reported | The booking becomes |
+| --- | --- | --- |
+| `attended: true` | Nothing, or that they attended | `COMPLETED` |
+| `attended: true` | That they didn't attend | `DISPUTED` |
+| `attended: false` | Anything | `SUPPLIER_NO_SHOW` |
+
+A supplier report never sets `CLIENT_NO_SHOW`. To record that the client
+didn't come, the business sets `CLIENT_NO_SHOW` with the API key. See
+[The booking lifecycle](/resources/bookings#the-booking-lifecycle).
+
+The `201` returns the same report view, now with `report` filled in.
+
+**The response carries no booking status.** The report view says what each
+answer *would* do. It doesn't say what the booking became. To show the
+outcome, re-read the booking:
+
+```
+GET /v1/projects/{projectId}/suppliers/me/bookings/bk_01kx16f2a0e5x9jv6r0c1qs7pm
+```
+
+and show `data.booking.status`. No read tells the supplier what the client
+reported. A booking that reads `DISPUTED` is enough: the business resolves it
+in the MarketBox console.
+
+### Retrying is safe
+
+Filing the same `attended` again returns `200`, with the report view, and
+changes nothing. So when a `POST` times out, send it again. Your portal can't
+tell a lost request from a lost response, and it doesn't need to.
+
+- Only `attended` is compared. A retry with a different `note` still returns
+  `200`, and the first `note` is kept.
+- A booking cancelled since the first `POST` answers the retry with
+  `422 BOOKING_NOT_REPORTABLE`, even when a report is on file.
+
+### When a report is refused
+
+| Status and `code` | What it means | What to do |
+| --- | --- | --- |
+| `201` | Filed, and the booking settled. | Re-read the booking for its status. |
+| `200` | The same answer was already on file. | Nothing. Treat it as filed. |
+| `409 REPORT_ALREADY_EXISTS` | A different answer is on file. A filed answer can't be changed here. | Show `existing.attended`. If it's wrong, the supplier contacts the business. |
+| `409 BOOKING_ALREADY_SETTLED` | The business, or your key, settled the booking first. Nothing was recorded. | Re-read the booking and show its status. |
+| `422 BOOKING_NOT_REPORTABLE` | The booking was cancelled, or hasn't ended yet. | Read the `message`. Hide the report button until `reportable` is `true`. |
+| `404 NOT_FOUND` | Not the supplier's booking, or no such booking. The two are identical. | Drop it from the view. |
+| `400 VALIDATION_ERROR` | `attended` missing or not a boolean, or `note` over 1,000 characters. | Fix the request. |
+
+The two `409` bodies carry the `code`, `message` and `statusCode`, without a
+`requestId`. A different answer on file also names it:
+
+```json
+{
+  "code": "REPORT_ALREADY_EXISTS",
+  "message": "A different answer is already on file for this booking, and a filed answer cannot be changed here.",
+  "statusCode": 409,
+  "existing": { "attended": false }
+}
+```
+
+```json
+{
+  "code": "BOOKING_ALREADY_SETTLED",
+  "message": "This booking has already been settled, so your answer was not recorded. If the outcome is wrong, contact the business.",
+  "statusCode": 409
+}
+```
+
+`422 BOOKING_NOT_REPORTABLE` uses the standard envelope, with one of two
+messages:
+
+```json
+{
+  "code": "BOOKING_NOT_REPORTABLE",
+  "message": "Attendance can be reported once the booking has ended and before it is settled.",
+  "statusCode": 422,
+  "requestId": "9c3e7a1f-4b2d-4f58-8e06-1a5d9b3c7e42"
+}
+```
+
+A cancelled booking reads `"This booking was cancelled, so there is no
+attendance to report."`
+
+### After it settles
+
+- **`COMPLETED` isn't final straight away.** A client who reports that they
+  didn't attend within 24 hours of the booking becoming `COMPLETED` moves it to
+  `DISPUTED`. The business can also move it back to `AWAITING_CONFIRMATION`
+  within its reversal window, 7 days by default, counted from
+  `statusUpdatedAt`. Show "Completed", but run anything final in your own
+  records, such as a supplier's pay, after those windows.
+- **Nothing settles a booking on a timer.** No job completes a booking that
+  nobody reported on. If the supplier never files, the booking stays
+  `AWAITING_CONFIRMATION` until the business settles it. That's why the next
+  section matters.
+
+See [Attendance and disputes](/resources/bookings#attendance-and-disputes) for
+every combination of reports.
+
+## Overdue reports
+
+`GET /suppliers/me/alerts/summary` carries a `MY_REPORTS_OVERDUE` condition
+while the supplier has bookings waiting for their report:
+
+```json
+{
+  "data": {
+    "unreadCount": 2,
+    "unreadCapped": false,
+    "conditions": [
+      {
+        "kind": "MY_REPORTS_OVERDUE",
+        "count": 3,
+        "target": { "kind": "myAppointments", "filter": "awaiting" }
+      }
+    ]
+  }
+}
+```
+
+- **Poll at most every 60 seconds.** The count may lag by up to 5 minutes.
+- `count` is the supplier's bookings in `AWAITING_CONFIRMATION`, capped at
+  100. The condition is left out when there are none, rather than sent with
+  `0`.
+- It's a condition, not an alert. It has no read state, and **Mark all as
+  read** doesn't clear it. It leaves when the supplier files the reports, up to
+  5 minutes later.
+- It counts only bookings the hourly sweep has reached. A booking that ended
+  in the last hour can be reportable and not yet counted. The day view's
+  `myReport.reportable` shows those.
+
+Map `target` to a list of the bookings awaiting a report:
+
+```
+GET /v1/projects/{projectId}/suppliers/me/bookings?status=AWAITING_CONFIRMATION&startDate=2026-08-05T00:00:00.000Z&endDate=2026-11-03T23:59:59.000Z&expand=client,services,myReport
+```
+
+The window must be at most 93 days with these expansions. A supplier who
+hasn't reported for longer than that has older bookings too: page back a window
+at a time until the total matches `count`, or send
+`status=AWAITING_CONFIRMATION` with `expand=client` only, which needs no
+window.
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | Auth | Description |
+| --- | --- | --- | --- |
+| `/v1/projects/{projectId}/suppliers/me/bookings` | `GET` | `x-api-key` + supplier `Bearer` | The supplier's bookings that start in a window, with `viewerActions` and `expand`. |
+| `/v1/projects/{projectId}/suppliers/me/bookings/{bookingId}` | `GET` | `x-api-key` + supplier `Bearer` | One booking, with its service lines and participants. |
+| `/v1/projects/{projectId}/suppliers/me/bookings/{bookingId}/reports` | `GET` | `x-api-key` + supplier `Bearer` | Whether a report is taken now, what each answer would do, and the report on file. |
+| `/v1/projects/{projectId}/suppliers/me/bookings/{bookingId}/reports` | `POST` | `x-api-key` + supplier `Bearer` | File the supplier's attendance report. |
+| `/v1/projects/{projectId}/suppliers/me/alerts/summary` | `GET` | `x-api-key` + supplier `Bearer` | The badge, with `MY_REPORTS_OVERDUE`. |
+| `/v1/projects/{projectId}/suppliers/me/alerts` | `GET` | `x-api-key` + supplier `Bearer` | The alerts themselves, each naming its booking. |
+
+### Errors and edge cases
+
+| Scenario | `code` | Status | Resolution |
+| --- | --- | --- | --- |
+| An `expand` value other than `client` without both dates | `BAD_REQUEST` | `400` | Send `startDate` and `endDate`. |
+| A window over 93 days with a per-booking `expand` | `BAD_REQUEST` | `400` | Shorten the window, or drop the expansion. |
+| A booking that starts exactly at local midnight is missing | — | — | Send the bounds with milliseconds, as `.000Z`. |
+| An unknown `expand` value | `BAD_REQUEST` | `400` | The `message` names it and lists the allowed values. |
+| A cancel or move after `viewerActions` said yes | `NOTICE_WINDOW_PASSED` | `409` | The window closed since the read. Re-read the booking. |
+| A report before the booking has ended | `BOOKING_NOT_REPORTABLE` | `422` | Wait until `reportable` is `true`. |
+| A report on a cancelled booking | `BOOKING_NOT_REPORTABLE` | `422` | There is nothing to report. |
+| A report with a different answer than the one on file | `REPORT_ALREADY_EXISTS` | `409` | The answer can't be changed. The supplier contacts the business. |
+| A report on a booking already settled | `BOOKING_ALREADY_SETTLED` | `409` | Re-read the booking and show its status. |
+| The same `attended` sent twice | — | `200` | Treated as filed. Safe to retry. A changed `note` is ignored. |
+| `ifAttended` said `COMPLETED`, the booking reads `DISPUTED` | — | — | The client had reported they didn't attend. The business resolves it. |
+| A booking left `AWAITING_CONFIRMATION` for days | — | — | Nothing settles it on a timer. Show `MY_REPORTS_OVERDUE` and prompt the supplier. |
+
+See [Errors](/concepts/errors) for the envelope, and
+[Bookings](/resources/bookings) for every status.
