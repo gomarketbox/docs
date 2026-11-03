@@ -164,7 +164,8 @@ You can also create an order with `items: []` and add items afterwards.
 
 A `PACKAGE` line names the package instead: `{ "skuType": "PACKAGE",
 "packageId": "pkg_…" }`. The server derives the service, offering, session
-count, price and expiry from the package. Add `PACKAGE` lines here, at create:
+count, price and expiry from the package. See
+[Selling a package](/resources/packages#selling-a-package). Add `PACKAGE` lines here, at create:
 `POST .../orders/{orderId}/items` takes no `packageId`.
 
 Pass `locale` — the language the buyer completed the purchase in, typically the
@@ -350,7 +351,10 @@ write, and stamps two fields on it:
 | `paymentMethod` | How the order was settled: `STRIPE`, `CASH`, `EXTERNAL`, `COMP`, `MIXED` (more than one source contributed), or `LEGACY` (migrated from MarketBox v1 with no settling ledger rows). Absent until the order is `PAID`. |
 | `settledAt` | The instant the money that completed the order was recorded — your "cash received" date. |
 
-`amountComped` totals the comps on the order. Treat it as zero when absent.
+`amountComped` totals the order's `ADJUSTMENT` rows with `source: COMP`. A
+`PAYMENT` row with `source: COMP` counts toward `amountPaid` instead. Treat
+`amountComped` as zero when absent. See
+[What each row does to the order](/resources/transactions#what-each-row-does-to-the-order).
 
 Two rules on the transaction body:
 
@@ -368,7 +372,9 @@ recording whose row could not be read back. It is terminal. Do not retry it.
 Re-read the order's transactions and contact support with the `requestId`.
 
 Every transaction also carries `channel`, the path that wrote it (`OPEN_API`
-for your key, `BACKOFFICE`, `STRIPE_WEBHOOK`, and others), and `reason`.
+for your key, `BACKOFFICE`, `STRIPE_WEBHOOK`, and others), and `reason`. For
+the transaction object, its kinds, and listing the ledger, see
+[Transactions](/resources/transactions).
 
 ## Listing orders
 
@@ -424,6 +430,6 @@ Each of these is a `400`:
 - `DELETE /v1/projects/{projectId}/orders/{orderId}/items/{orderItemId}`
 - `POST /v1/projects/{projectId}/orders/{orderId}/package-bookings` — see [Create a package booking](/guides/create-a-package-booking)
 - `GET  /v1/projects/{projectId}/orders/{orderId}/package-bookings`
-- `POST /v1/projects/{projectId}/orders/{orderId}/transactions`
-- `GET  /v1/projects/{projectId}/transactions`
+- `POST /v1/projects/{projectId}/orders/{orderId}/transactions` — see [Transactions](/resources/transactions)
+- `GET  /v1/projects/{projectId}/transactions` — see [Transactions](/resources/transactions)
 - `POST /v1/projects/{projectId}/orders/{orderId}/payment-intent` — see [Accept payments with Stripe](/guides/accept-payments-with-stripe)

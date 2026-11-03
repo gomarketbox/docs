@@ -1,0 +1,216 @@
+---
+title: Packages
+description: Prepaid sessions of one offering, sold as one order line and drawn down by later bookings.
+---
+
+A **package** sells a number of prepaid sessions of one offering for one
+price, such as "10 swim lessons for $405". A client buys it as one order line.
+Each later booking draws one session from it.
+
+A package belongs to one offering, and through it to one service. See
+[Services and offerings](/resources/services) for the objects above it, and
+[The booking engine model](/concepts/booking-engine-model#single-vs-package)
+for how its sessions are drawn down.
+
+## Before you create one
+
+The service needs an **active `PACKAGE` business model**. A
+`SCHEDULED_PACKAGE` model isn't enough to create a package. Without one, the
+create is a `400`, and nothing is written:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Service has no active PACKAGE business model; cannot create packages",
+  "statusCode": 400,
+  "requestId": "6e2a9d4b-8c1f-4b73-a5d0-2f7e1c9b3a68"
+}
+```
+
+Add the business model first. See
+[Adding a business model](/resources/services#adding-a-business-model).
+
+## The package lifecycle
+
+```
+DRAFT ◄──► ACTIVE ◄──► ARCHIVED
+  ▲                       │
+  └───────────────────────┘
+```
+
+`POST /v1/projects/{projectId}/packages/{packageId}/status` moves a package to
+any of the three statuses, from any other. There is no transition table, so
+you can take a package off sale and put it back.
+
+| Status | Meaning |
+| --- | --- |
+| `DRAFT` | Not ready. Send it on create while you set the package up. |
+| `ACTIVE` | On sale. A new package is `ACTIVE` unless you send `status`. |
+| `ARCHIVED` | Retired. Use it to stop selling a package. |
+
+**The status is a storefront flag, not a gate.** It's what your storefront
+filters on, and `POST /availability/package-options` plans only `ACTIVE`
+packages. `POST /orders` doesn't check it: an order line for a `DRAFT` or
+`ARCHIVED` package is priced and accepted like an `ACTIVE` one. So list only
+`status=ACTIVE` packages to clients, and check a package's `status` before you
+put it on an order.
+
+Sessions a client already bought stay bookable whatever the package's status,
+because the order item captured the package when it was bought. Three other
+things do stop them being booked:
+
+- The offering is deleted. Each session booking is a `404 NOT_FOUND`,
+  `Offering off_… not found`.
+
+- The offering is `INACTIVE`. Each session booking is a `400 BAD_REQUEST`,
+  `Offering off_… is not bookable (status: INACTIVE)`. An order line for the
+  package is still accepted, so check the offering before you sell.
+- The service has no active `PACKAGE` business model. Each session booking is
+  a `400 NOT_A_PACKAGE_SERVICE`. See
+  [Changing a business model](/resources/services#changing-a-business-model).
+
+There is no delete route. Archive a package to retire it.
+
+## Anatomy of a package
+
+| Field | Meaning |
+| --- | --- |
+| `packageId` | The id, `pkg_…`. |
+| `serviceId`, `offeringId` | The service and offering it sells sessions of. Fixed at creation. |
+| `name`, `description` | Optional localized text. |
+| `creditCount` | How many sessions the package holds. |
+| `pricing` | Price rules for the **whole package**. See [Pricing](#pricing). |
+| `pricingModel` | Always `FLAT`. |
+| `validityDays` | How many days after purchase the sessions stay bookable. `null` means they never expire. |
+| `capacity` | Seats per session. Defaults to `1`. |
+| `discountPercent` | Informational only. See [Pricing](#pricing). |
+| `status` | `DRAFT`, `ACTIVE` or `ARCHIVED`. |
+| `createdAt`, `updatedAt`, `createdBy`, `updatedBy` | Audit fields. |
+
+## Pricing
+
+A package's `pricing` uses the same rules as an offering's: exactly one
+`DEFAULT` rule, a child rule needs its parent, and country and state are
+stored as ISO codes. See [Pricing rules](/resources/services#pricing-rules).
+
+**Each rule's amount is the price of the whole package**, not of one session.
+A 10-session package at `40500` charges `40500` once.
+
+When the package is bought, the order line takes:
+
+- `quantity`: the package's `creditCount`.
+- `lineTotal`: the matched rule's amount, for the order's region.
+- `unitPrice`: `lineTotal` divided by `creditCount`, for display. It may not
+  divide exactly. `lineTotal` is the figure that's charged.
+- `expiresAt`: the purchase time plus `validityDays`, or `null`.
+
+`discountPercent` records the discount used when the package's prices were
+first worked out from the offering's. It isn't used to charge anything, and it
+may not match `pricing` after an edit. Never compute an amount from it.
+
+A package created before regional pricing existed reads back with one
+`DEFAULT` rule whose `ruleId` is `r_legacy_default`.
+
+## Creating a package
+
+`POST /v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}/packages`:
+
+```json
+{
+  "name": { "en": "10-lesson pack" },
+  "creditCount": 10,
+  "pricing": [
+    { "ruleId": "default", "scope": "DEFAULT", "price": { "amount": 40500, "currency": "CAD" } }
+  ],
+  "validityDays": 180,
+  "status": "DRAFT"
+}
+```
+
+- `creditCount` and `pricing` are required.
+- `status` defaults to `ACTIVE`, so the package is on sale as soon as it's
+  created. Send `DRAFT` until it's ready.
+- `capacity` defaults to `1`, and `validityDays` to `null`.
+
+The offering must belong to the service in the path and not be deleted.
+Otherwise the create is a `404 NOT_FOUND`, `Offering not found for this
+service`.
+
+The create takes no idempotency key. A retried `POST` makes a second package,
+so list before you retry.
+
+## Updating a package
+
+`PUT /v1/projects/{projectId}/packages/{packageId}` is a partial update. Only
+the fields you send change.
+
+- Send `pricing` whole, including its `DEFAULT` rule. It's checked against the
+  same rules as on create.
+- A new `pricing` or `creditCount` applies to future purchases only. A package
+  already bought keeps the sessions and price it was bought with.
+- The offering and service can't be changed. Create a new package instead.
+- `status` isn't settable here. Use the status route.
+
+An unknown `packageId` is `404 NOT_FOUND`, `Package not found`.
+
+## Listing packages
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /v1/projects/{projectId}/services/{serviceId}/packages` | Every package of the service, across its offerings. Each one carries its `offeringId`. An unknown `serviceId` is a `404`. |
+| `GET /v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}/packages` | The packages of one offering, sorted by status, then by `creditCount`. An unknown `offeringId` returns an empty list, not a `404`. |
+| `GET /v1/projects/{projectId}/packages/{packageId}` | One package, by its id alone. A deleted one is a `404`. |
+
+Both lists take `status`. Send `status=ACTIVE` for a storefront: otherwise
+`DRAFT` and `ARCHIVED` packages are included. Neither list is paginated, and
+`nextCursor` is always `null`.
+
+A service that sells no packages returns `200` with `data: []`. For a
+storefront built on these reads, see
+[Show a package storefront](/guides/show-a-package-storefront).
+
+## Selling a package
+
+A package is sold as an order line that names it:
+
+```json
+{
+  "clientId": "cli_01kx16f0a1c7b2sd91xzq3mn5p",
+  "currency": "CAD",
+  "items": [{ "skuType": "PACKAGE", "packageId": "pkg_01kv60qgs4e4nbjhzradnqtj0h" }]
+}
+```
+
+The server works out the service, offering, session count, price and expiry
+from the package. Add `PACKAGE` lines when you create the order:
+`POST .../orders/{orderId}/items` takes no `packageId`. See
+[Creating an order](/resources/orders#creating-an-order).
+
+These refuse the order, and nothing is written:
+
+| Cause | Status | `code` | `message` |
+| --- | --- | --- | --- |
+| The `packageId` isn't a package in the project. | `404` | `NOT_FOUND` | `Package pkg_… not found` |
+| The matched price rule's currency isn't the order's. | `400` | `BAD_REQUEST` | `Package currency USD does not match order currency CAD` |
+| The service has no active `PACKAGE` or `SCHEDULED_PACKAGE` business model. | `422` | `SERVICE_NOT_SOLD_AS` | `Service srv_… is not sold as a package; …` |
+
+Once the order exists, its `PACKAGE` order item is the client's balance of
+sessions: `quantityRemaining` is the live count. Book from it with
+[Create a package booking](/guides/create-a-package-booking).
+
+<Note>
+On the client plane, a client books their own package sessions only from a
+`PAID` order. The API-key routes don't check payment. See
+[Book a client's package credit](/guides/book-a-package-credit).
+</Note>
+
+## Endpoint index
+
+- `POST /v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}/packages`
+- `GET  /v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}/packages`
+- `GET  /v1/projects/{projectId}/services/{serviceId}/packages`
+- `GET  /v1/projects/{projectId}/packages/{packageId}`
+- `PUT  /v1/projects/{projectId}/packages/{packageId}`
+- `POST /v1/projects/{projectId}/packages/{packageId}/status`
+- `POST /v1/projects/{projectId}/availability/package-options` — see [Show a package storefront](/guides/show-a-package-storefront)
+- `POST /v1/projects/{projectId}/orders/{orderId}/package-bookings` — see [Create a package booking](/guides/create-a-package-booking)

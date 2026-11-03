@@ -19,11 +19,12 @@ site — it exists specifically to name the words the other pages avoid.
 | --- | --- | --- | --- |
 | provider | **supplier** | The person or resource delivering the service — a stylist, a doctor, a tutor, a meeting room. | [Suppliers](/resources/suppliers) |
 | staff, vendor | **supplier** | Same as above — MarketBox uses one word for every shape of "who fulfills the booking." | [Suppliers](/resources/suppliers) |
-| customer | **client** | The person the service is for. | [Onboard the client](/guides/booking-flow-auth#onboard-the-client) |
+| customer | **client** | The person the service is for. | [Clients](/resources/clients) |
 | appointment | **booking** | One scheduled unit of service — a supplier, a client, a time window, and one or more service lines. | [Bookings](/resources/bookings) |
-| product | **service** | The sellable thing suppliers offer, catalogued per project. | [The booking engine model](/concepts/booking-engine-model) |
-| bundle, credit pack | **package** | A prepaid set of sessions, drawn down one booking at a time via an order item's `quantityRemaining`. | [Single vs package](/concepts/booking-engine-model#single-vs-package) |
-| lock, block | **hold** | A temporary claim on a supplier's time — reserved during checkout, then converted into real bookings or released. | [Hold slots during checkout](/guides/hold-slots-for-checkout) |
+| product | **service** | The sellable thing suppliers offer, catalogued per project. | [Services and offerings](/resources/services) |
+| option, variant | **offering** | A bookable variant of a service, with its own duration and price. | [Offerings](/resources/services#offerings) |
+| bundle, credit pack | **package** | A prepaid set of sessions, drawn down one booking at a time via an order item's `quantityRemaining`. | [Packages](/resources/packages) |
+| lock, block | **hold** | A temporary claim on a supplier's time — reserved during checkout, then converted into real bookings or released. | [Holds](/resources/holds) |
 | provider portal, staff app | **supplier plane** | The `/suppliers/me` routes a signed-in supplier calls through your portal. | [Build a supplier portal](/guides/build-a-supplier-portal) |
 | API scope, permission | **capability** | What kinds of route an API key may call: standard access (`*`) or site events. | [Capabilities](/concepts/authentication#capabilities) |
 | analytics, tracking | **site events** | What your site reports about the suppliers it showed, and what clients saw and opened. | [Report site events](/guides/report-site-events) |

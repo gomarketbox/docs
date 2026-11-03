@@ -1,0 +1,242 @@
+---
+title: Clients
+description: The person the service is for — the client profile, the routes a signed-in client calls on their own behalf, and the API-key routes that read a client's history.
+---
+
+A **client** is the person a service is for. Every order and booking names
+one by `clientId`, `cli_…`. A client belongs to one project.
+
+Clients are reached two ways, and the difference matters for security:
+
+- **The client plane**, under `/clients/me`. Your server sends the API key
+  **and** the signed-in client's user token. MarketBox works out which client
+  it is from the token. It never takes a client id from the URL.
+- **API-key routes**, under `/clients/{clientId}`. Your server sends the API
+  key alone and names the client. They return whatever client you ask for in
+  the project, so your server must check the client is the one signed in.
+
+## Which routes need which credentials
+
+Every path is relative to the project: `POST /clients/me` is
+`POST /v1/projects/{projectId}/clients/me`.
+
+| Method | Path | Credentials | What it does |
+| --- | --- | --- | --- |
+| `POST` | `/clients/me` | API key + user token | Onboard the signed-in client, or return their profile. |
+| `PATCH` | `/clients/me` | API key + user token | Change `firstName`, `lastName` or `phone`. |
+| `POST` | `/clients/me/addresses` | API key + user token | Save an address. |
+| `PATCH` | `/clients/me/addresses/{addressId}` | API key + user token | Change a saved address. |
+| `DELETE` | `/clients/me/addresses/{addressId}` | API key + user token | Remove a saved address. |
+| `PUT` | `/clients/me/addresses/{addressId}/default` | API key + user token | Make a saved address the default. |
+| `GET` | `/clients/me/credits` | API key + user token | The client's package sessions left to book. |
+| `POST` | `/clients/me/orders/{orderId}/package-bookings` | API key + user token | Book the client's own package sessions. |
+| `GET` | `/clients/{clientId}/bookings` | API key | The client's bookings. |
+| `GET` | `/clients/{clientId}/orders` | API key | The client's orders. |
+| `GET` | `/clients/{clientId}/reviews` | API key | The reviews the client wrote. See [Reviews](/resources/reviews). |
+| `GET` | `/clients/{clientId}/review-summary` | API key | The client's review summary. See [Reviews](/resources/reviews). |
+
+Send the API key as `x-api-key` and the user token as
+`Authorization: Bearer <token>`. Both come from your server: see
+[The BFF pattern](/guides/booking-flow-auth#the-bff-pattern) and
+[End-user authentication](/concepts/end-user-authentication).
+
+**No API-key route creates, reads or lists clients.** A client is created when
+a person signs in to your booking flow and you onboard them, or by the business
+in the MarketBox dashboard. A key-only integration gets a `clientId` from those
+places, or from an order or booking that names it.
+
+<Warning>
+**The API-key routes don't know who is signed in.** A server that takes the
+`clientId` from the browser shows one client another client's bookings, names
+and addresses. Resolve the `clientId` from the user token with
+`POST /clients/me`, and use that one. See
+[Show booking and order history](/guides/manage-a-client-account#show-booking-and-order-history).
+</Warning>
+
+## Anatomy of a client
+
+The client plane returns the client's profile in `data`:
+
+| Field | Meaning |
+| --- | --- |
+| `clientId` | The id, `cli_…`. |
+| `firstName`, `lastName`, `fullName` | The client's name in this project. It doesn't rename the person's sign-in account. |
+| `email` | From the client's sign-in. No client-plane route changes it. |
+| `phone` | E.164, such as `+14165550134`. Absent when not given. |
+| `addresses[]` | The client's saved addresses. Each has an `id` and a `source`: `MANUAL` when saved through the client plane, `BOOKING` when MarketBox saved it from an in-home booking. |
+| `defaultAddressId` | The default address. It prices orders that name no place of their own. Absent when there is none. |
+| `lastPayment` | A display-only snapshot of the card the client last paid with. See [Show the card a client last paid with](/guides/accept-payments-with-stripe#show-the-card-a-client-last-paid-with). |
+| `defaultLocale` | The language of the client's latest booking, as BCP-47. Every booking whose order carried a `locale` overwrites it. |
+| `active` | Whether the client is active in this project. |
+| `createdAt`, `updatedAt` | Audit fields. |
+
+## Onboarding a client
+
+`POST /clients/me` makes the signed-in person a client of the project. Call it
+after every sign-in. It's idempotent:
+
+| What already exists | What happens | Status |
+| --- | --- | --- |
+| A client linked to this person in this project. | Returns that client. | `200` |
+| A client with the person's email, linked to nobody. | Links that client to the person and returns it. This is how a client the business added in the dashboard claims their record. | `200` |
+| A client with the person's email, linked to someone else. | Refused. The person is still added as a member of the project. | `409` |
+| Nothing. | Creates the client. When the project has Stripe connected, it also creates the client's record in Stripe. | `201` |
+
+There is no `GET /clients/me`. To read the profile, call `POST /clients/me`
+with no body. It writes nothing and returns the profile.
+
+The body is optional. Send `firstName`, `lastName` and `phone` to record what
+your checkout collected:
+
+```json
+{ "firstName": "Emma", "lastName": "Bishop", "phone": "(416) 555-0134" }
+```
+
+Each field you send overwrites the stored value, on every path. A blank or
+`null` field counts as not sent, so onboarding never clears anything. Without
+names, a client who signed up with an email and password is recorded under
+the part of their email before the `@`. See
+[Onboard the client](/guides/booking-flow-auth#onboard-the-client).
+
+An email already linked to another person returns a `409`:
+
+```json
+{
+  "code": "CONFLICT",
+  "message": "This email is already linked to another account",
+  "statusCode": 409,
+  "requestId": "3e7b1c9a-5d2f-4a86-b0e4-8c1f6a3d9b27"
+}
+```
+
+A person whose access the business removed is refused before anything is read
+or written:
+
+```json
+{
+  "code": "MEMBERSHIP_INACTIVE",
+  "message": "Your access to this business was removed. Ask them to invite you again.",
+  "statusCode": 403,
+  "requestId": "9c4a2e7f-1b8d-4f53-a6c0-2d9e5b1f7a84"
+}
+```
+
+## The rest of the client plane
+
+Every client-plane route except `POST /clients/me` needs the person to be
+onboarded first. Before that, they have no membership of the project, and
+each route returns a `403`:
+
+```json
+{
+  "code": "FORBIDDEN",
+  "message": "No active membership on this project",
+  "statusCode": 403,
+  "requestId": "6a1f3c8e-2b7d-4e95-a0c4-9d3e5b1f7a28"
+}
+```
+
+A member of the project with no client profile, such as a staff member, gets
+`404 NOT_FOUND`, `No client profile for this project`, instead. On
+`PATCH /clients/me` the message adds `POST /clients/me first`.
+
+The profile and address routes are covered in full in
+[Manage a client's account](/guides/manage-a-client-account). In short:
+
+- `PATCH /clients/me` changes the name or phone. A name can be changed but
+  not cleared. `phone: null` clears the phone.
+- An address id is derived from the address. Saving the same address twice
+  returns the same id, and an edit can change the id. Re-read ids from each
+  response.
+- The first address a client saves becomes their default. Later ones don't
+  replace it.
+- The default address decides the region an order is priced in when the
+  order names no place. See
+  [Choose the default address](/guides/manage-a-client-account#choose-the-default-address).
+
+## A client's package credits
+
+`GET /clients/me/credits` lists the package sessions the signed-in client can
+still book. Each entry is one `PACKAGE` order item the client owns:
+
+```json
+{
+  "data": [
+    {
+      "orderId": "ord_01kv7n10k0fnptwk81wkm59vj7",
+      "orderItemId": "oi_01kv7n10k0fnptwk81wkm59vj7",
+      "packageId": "pkg_01kv60qgs4e4nbjhzradnqtj0h",
+      "serviceId": "srv_01kv60qg12e82acr78edfnjhvv",
+      "offeringId": "off_01kv60qgs4e4nbjhzradnqtj0h",
+      "quantity": 10,
+      "quantityAllocated": 3,
+      "quantityRemaining": 7,
+      "quantityReturned": 1,
+      "unitPrice": { "amount": 4050, "currency": "CAD" },
+      "expiresAt": "2027-01-12T15:04:05.000Z",
+      "orderStatus": "PAID"
+    }
+  ]
+}
+```
+
+- `quantityRemaining` is the live balance. Show this one.
+- `quantityReturned` counts sessions that cancellations gave back, ever. They
+  are already inside `quantityRemaining`.
+- Only `PAID` orders count. A package on an unpaid order isn't listed.
+- Expired packages and packages with nothing left are left out. Send
+  `includeExpired=true` to keep expired ones.
+
+The client books from a listed credit with
+`POST /clients/me/orders/{orderId}/package-bookings`. It takes the same body as
+`POST /orders/{orderId}/package-bookings`, plus two refusals of its own:
+
+- Another client's order, or one that doesn't exist, is `404 NOT_FOUND`,
+  `Order ord_… not found`.
+- A credit the credits list wouldn't show is a `409`. That covers an unpaid
+  order and a used-up or expired package. A removed order item is a
+  `404 NOT_FOUND` instead, and a cancelled order is `409 ORDER_CANCELLED`:
+
+```json
+{
+  "code": "CREDIT_NOT_BOOKABLE",
+  "message": "This credit is not available to book",
+  "statusCode": 409,
+  "requestId": "8e3d1b7a-4c9f-4a25-b6e0-1f7c3a9d5e62"
+}
+```
+
+This is where payment is enforced: a client books package sessions only from
+a `PAID` order. The API-key route `POST /orders/{orderId}/package-bookings`
+doesn't check payment. See
+[Book a client's package credit](/guides/book-a-package-credit).
+
+## A client's history
+
+`GET /clients/{clientId}/bookings` and `GET /clients/{clientId}/orders` take
+the API key alone. Both are paginated with `limit` and `cursor`: see
+[Pagination](/concepts/pagination).
+
+- Bookings are listed by date. Filter with `startDate`, `endDate` (UTC) and
+  `status`. See [Bookings](/resources/bookings).
+- Orders are listed newest first, in every status. See
+  [Orders](/resources/orders).
+
+Neither route checks the `clientId`. A client id that doesn't exist, or
+belongs to another project, returns `200` with an empty `data`. An empty list
+doesn't prove the id was right.
+
+## Endpoint index
+
+- `POST /v1/projects/{projectId}/clients/me`
+- `PATCH /v1/projects/{projectId}/clients/me`
+- `POST /v1/projects/{projectId}/clients/me/addresses`
+- `PATCH /v1/projects/{projectId}/clients/me/addresses/{addressId}`
+- `DELETE /v1/projects/{projectId}/clients/me/addresses/{addressId}`
+- `PUT  /v1/projects/{projectId}/clients/me/addresses/{addressId}/default`
+- `GET  /v1/projects/{projectId}/clients/me/credits`
+- `POST /v1/projects/{projectId}/clients/me/orders/{orderId}/package-bookings`
+- `GET  /v1/projects/{projectId}/clients/{clientId}/bookings`
+- `GET  /v1/projects/{projectId}/clients/{clientId}/orders`
+- `GET  /v1/projects/{projectId}/clients/{clientId}/reviews` — see [Reviews](/resources/reviews)
+- `GET  /v1/projects/{projectId}/clients/{clientId}/review-summary` — see [Reviews](/resources/reviews)

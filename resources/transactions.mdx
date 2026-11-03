@@ -1,0 +1,208 @@
+---
+title: Transactions
+description: The money ledger behind every order — recording cash, external payments and comps, and reading the ledger back for reconciliation.
+---
+
+A **transaction** is one row in a project's money ledger. Each row belongs to
+one order. An order's `amountPaid`, `amountComped`, `paymentMethod`,
+`settledAt` and `PAID` status are all worked out from its rows. See
+[Settling an order](/resources/orders#settling-an-order).
+
+Money reaches the ledger two ways:
+
+- **Cards** go through Stripe. `POST .../orders/{orderId}/payment-intent`
+  writes a `PENDING` row, and Stripe's confirmation to MarketBox settles it.
+  See [Accept payments with Stripe](/guides/accept-payments-with-stripe).
+- **Cash, bank transfers and comps** are recorded by you, with
+  `POST .../orders/{orderId}/transactions`. See
+  [Recording a transaction](#recording-a-transaction).
+
+The ledger is append-only. A row is never edited. A correction is a new row
+that points at the one it corrects through `relatedTransactionId`.
+
+## Anatomy of a transaction
+
+| Field | Meaning |
+| --- | --- |
+| `transactionId` | The id, `txn_…`. |
+| `orderId` | The order the row belongs to. |
+| `clientId` | The client who paid. Defaults to the order's client. |
+| `kind` | What the row is. See [Kinds](#kinds). |
+| `source` | Where the money came from: `STRIPE`, `CASH`, `EXTERNAL`, `COMP` or `PACKAGE_CREDIT`. |
+| `status` | `PENDING`, `SUCCEEDED`, `FAILED` or `CANCELED`. Only `PENDING` changes, once, to one of the other three. |
+| `amount` | `{ amount, currency }`, in integer minor units. Never negative: `kind` carries the direction. |
+| `channel` | The path that wrote the row: `OPEN_API` for your key, `BACKOFFICE`, `STRIPE_WEBHOOK`, `SCHEDULER`, `ORDER_CASCADE` or `MIGRATION`. |
+| `reason` | Why a comp was given. Set on every `COMP` row. |
+| `note` | Your free-text note, up to 500 characters. |
+| `relatedTransactionId` | The row this one corrects or offsets, when it does. |
+| `orderItemId`, `bookingId`, `allocationId` | Set on credit rows, which tie a package session to the booking that used it. |
+| `stripePaymentIntentId`, `stripeChargeId`, `stripeRefundId` | Stripe's ids, on `STRIPE` rows. |
+| `failureCode`, `failureMessage` | Why a `FAILED` row failed. |
+| `createdAt`, `updatedAt`, `createdBy`, `updatedBy` | Audit fields. |
+
+### Kinds
+
+| `kind` | Meaning | Money? |
+| --- | --- | --- |
+| `PAYMENT` | Money received. | Yes |
+| `REFUND` | Money returned. It offsets a `PAYMENT`. Refunds are made in the MarketBox dashboard: the public API has no refund route. | Yes |
+| `ADJUSTMENT` | A correction recorded in the ledger. With `source: COMP` it's money waived, which counts toward settling the order. | Not collected. See [Summing the ledger](#summing-the-ledger). |
+| `CREDIT_REDEMPTION` | One package session used by a booking. | No. `source` is `PACKAGE_CREDIT`. |
+| `CREDIT_REVERSAL` | A used session given back, when its booking was cancelled. It offsets a `CREDIT_REDEMPTION`. | No. `source` is `PACKAGE_CREDIT`. |
+
+Package sessions actually used are redemptions minus reversals. Treat the list
+of kinds as open: switch on `kind` with a default branch.
+
+## Recording a transaction
+
+`POST /v1/projects/{projectId}/orders/{orderId}/transactions` records money
+that moved outside Stripe:
+
+```json
+{
+  "kind": "PAYMENT",
+  "source": "CASH",
+  "amount": { "amount": 4500, "currency": "CAD" },
+  "note": "Paid at the door",
+  "idempotencyKey": "9f8c0f7a-1f3f-4c8e-9a2b-6c7d8e9f0a1b"
+}
+```
+
+- `kind` is `PAYMENT` or `ADJUSTMENT`. `REFUND` is refused.
+- `source` is `CASH`, `EXTERNAL` or `COMP`. `STRIPE` is refused: card rows
+  come only from the payment-intent flow.
+- `amount.currency` must be the order's currency.
+- `clientId` is optional. It must be a client in this project.
+
+The row is written `SUCCEEDED` at once. There is no pending state to poll.
+
+### What each row does to the order
+
+| `kind` | `source` | Effect on the order |
+| --- | --- | --- |
+| `PAYMENT` | `CASH`, `EXTERNAL` | Adds to `amountPaid`. |
+| `PAYMENT` | `COMP` | Adds to `amountPaid`. |
+| `ADJUSTMENT` | `COMP` | Adds to `amountComped`. |
+| `ADJUSTMENT` | `CASH`, `EXTERNAL` | Nothing. The row is in the ledger, and the balance doesn't move. |
+
+When `amountPaid` plus `amountComped` covers the order's `total`, a `DRAFT` or
+`PENDING` order becomes `PAID` in the same write. `paymentMethod` and
+`settledAt` are stamped on it then. You can't ask for `PAID` directly. See
+[Settling an order](/resources/orders#settling-an-order).
+
+To waive what an order still owes, record an `ADJUSTMENT` with `source: COMP`
+for the balance. It counts as comped, not paid.
+
+The route doesn't check the order's status. A payment on a `PAID` or
+`CANCELLED` order is recorded, and `amountPaid` rises, but the status doesn't
+change. Read the order before you take money against it.
+
+### A comp needs a reason
+
+A row with `source: COMP` needs `reason`, 1–500 characters. Record why the
+charge was waived, such as `"Service recovery — late supplier"`. Without one,
+the row is refused:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "reason: COMP_REASON_REQUIRED: a comp needs a reason",
+  "statusCode": 400,
+  "requestId": "1d6a3f8c-9b2e-4c74-a5d0-7e2b9c1f4a63"
+}
+```
+
+### Send an idempotency key
+
+Send `idempotencyKey` on any recording you might retry. It's up to 128
+characters.
+
+- A first recording returns `201`, with `replayed: false`.
+- The same key on the same order returns the row the first call made, as
+  `200` with `replayed: true`. Nothing is recorded again.
+
+```json
+{
+  "data": {
+    "transactionId": "txn_01kx16f2a0h8a2my9u3f4tv0sp",
+    "orderId": "ord_01kx16f2a0h8a2my9u3f4tv0sp",
+    "kind": "PAYMENT",
+    "source": "CASH",
+    "status": "SUCCEEDED",
+    "amount": { "amount": 4500, "currency": "CAD" },
+    "channel": "OPEN_API"
+  },
+  "replayed": true
+}
+```
+
+Branch on the status code or on `replayed`. Never treat any `2xx` as "I just
+took a payment". A key belongs to one order and doesn't expire: the same key
+on another order records a new row.
+
+### Refusals
+
+| Status | `code` | `message` | What to do |
+| --- | --- | --- | --- |
+| `400` | `VALIDATION_ERROR` | Names the field, such as `reason: COMP_REASON_REQUIRED: a comp needs a reason`. | Fix the body. A `kind` or `source` outside the lists above lands here too. |
+| `400` | `BAD_REQUEST` | `A COMP transaction needs a reason` | The `reason` was only spaces. Send a real reason. |
+| `400` | `BAD_REQUEST` | `Transaction currency USD does not match order currency CAD` | Send the order's currency. An order's currency never changes. |
+| `404` | `NOT_FOUND` | `Order ord_… not found for transaction` | Check the `orderId`. A deleted order is not found. |
+| `404` | `NOT_FOUND` | `Client not found` | The `clientId` isn't a client in this project. Leave it out to use the order's. |
+| `409` | `VERSION_CONFLICT` | `Order ord_… was modified concurrently while recording a transaction` | Nothing was recorded. Retry. With the same `idempotencyKey`, a retry can't record twice. |
+| `409` | `TRANSACTION_IDEMPOTENCY_RECORD_MISSING` | Names the key and the order. | **Terminal.** The key was used, but its row can't be read. Don't retry. Read the order's ledger and contact support with the `requestId`. |
+
+## Listing transactions
+
+`GET /v1/projects/{projectId}/transactions` reads the ledger, newest first.
+
+| Query | Effect |
+| --- | --- |
+| `orderId` | Only rows on that order. |
+| `clientId` | Only rows for that client. |
+| `status` | Only rows in that status. |
+| `startDate`, `endDate` | Only rows recorded in that window. They narrow whichever list runs. |
+| `limit` | Rows per page, 1–200. Defaults to 50. |
+| `cursor` | The `nextCursor` of the previous page. |
+
+**`orderId`, `clientId` and `status` don't combine.** Only one of them takes
+effect, in that order, and the others are ignored without an error. So
+`orderId` with `status=FAILED` returns every row on the order, failed or not.
+To narrow by more than one, filter on your side.
+
+`startDate` is inclusive and `endDate` is exclusive. Send both bounds as full
+ISO-8601 instants, such as `2026-10-01T00:00:00.000Z`, and use the next
+period's start as `endDate`.
+
+Page with `cursor` until `nextCursor` is `null`. A page can hold fewer rows
+than `limit` before the end, so never stop on a short page. A cursor belongs
+to the filters that made it: start again when you change them. See
+[Pagination](/concepts/pagination).
+
+### Summing the ledger
+
+Both settled and unsettled rows come back. Count only
+`status: "SUCCEEDED"` rows: a `PENDING` Stripe row is a payment started, not
+money received.
+
+To work out what was collected, add the `SUCCEEDED` `PAYMENT` rows and
+subtract the `SUCCEEDED` `REFUND` rows, per `source`. Leave out:
+
+- `ADJUSTMENT` rows with `source: COMP`: money waived, not collected.
+- Other `ADJUSTMENT` rows, such as tips migrated from MarketBox v1, unless
+  you report tips.
+- `CREDIT_REDEMPTION` and `CREDIT_REVERSAL` rows, which aren't money.
+
+A `PAYMENT` with `source: COMP` is also a waiver, recorded as paid. Report it
+apart from cash.
+
+`GET /orders?paymentMethod=CASH` with `startSettledAt` and `endSettledAt` lists
+orders settled wholly in cash. It misses cash on an order settled from more
+than one source, which is `MIXED`, and on an order not yet `PAID`. For every
+cash row, read the ledger. See [Listing orders](/resources/orders#listing-orders).
+
+## Endpoint index
+
+- `POST /v1/projects/{projectId}/orders/{orderId}/transactions`
+- `GET  /v1/projects/{projectId}/transactions`
+- `POST /v1/projects/{projectId}/orders/{orderId}/payment-intent` — see [Accept payments with Stripe](/guides/accept-payments-with-stripe)

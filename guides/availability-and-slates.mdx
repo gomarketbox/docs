@@ -1275,6 +1275,11 @@ convert. See [Concurrency](/concepts/concurrency).
 | `/v1/projects/{projectId}/holds` | `POST` | `x-api-key` | Hold supplier time — `intervals`, `slateId`, or `slotIds` (exactly one). Returns `reservationId` + `heldUntil`. See [Hold slots during checkout](/guides/hold-slots-for-checkout). |
 | `/v1/projects/{projectId}/holds/{reservationId}/convert` | `POST` | `x-api-key` | Convert a hold into confirmed bookings. Idempotent — safe to retry. |
 | `/v1/projects/{projectId}/holds/{reservationId}/release` | `POST` | `x-api-key` | Release a hold. Idempotent — always `200`. |
+| `/v1/projects/{projectId}/suggestions/slots/{slotId}/reschedule` | `POST` | `x-api-key` | Move one slot of a stored slate to a new time before anything is booked. Full reference: [Suggestions](/resources/suggestions#rescheduling-a-slot). |
+
+For suggestion requests, slates and slots as objects, and the 24-hour window
+they stay usable in, see [Suggestions](/resources/suggestions). For the hold
+object, see [Holds](/resources/holds).
 
 ### Configuration
 

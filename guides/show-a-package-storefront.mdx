@@ -311,7 +311,7 @@ two values.
 
 | Endpoint | Method | Auth | Description |
 | --- | --- | --- | --- |
-| `/v1/projects/{projectId}/services/{serviceId}/packages` | `GET` | `x-api-key` | List every package on the service, across all its offerings. `?status=ACTIVE` for the purchasable bundles. `200 []` when the service sells none; `404` for an unknown `serviceId`. |
+| `/v1/projects/{projectId}/services/{serviceId}/packages` | `GET` | `x-api-key` | List every package on the service, across all its offerings. `?status=ACTIVE` for the purchasable bundles. `200 []` when the service sells none; `404` for an unknown `serviceId`. Full reference: [Packages](/resources/packages). |
 | `/v1/projects/{projectId}/availability/package-options` | `POST` | `x-api-key` | Plan every ACTIVE package of a service in one call. Each entry carries `status`, `reason`, and — when bookable — a ready-to-use `slateId`. Always `200`; per-package failures never fail the request. |
 
 ### Configuration
