@@ -26,16 +26,17 @@ your API key and the supplier's access token.
 For each supplier, MarketBox works out open time on every request, from the
 rows you write here:
 
-1. **Schedules.** Each `ACTIVE` schedule that serves the offering at the
-   requested place is expanded, day by day, in its own `timezone`.
+1. **Schedules.** Each `ACTIVE` schedule that serves the
+   [offering](/resources/services#offerings) at the requested place is
+   expanded, day by day, in its own `timezone`.
 2. **Minus `exdates`.** A date in a schedule's `exdates` removes that
    schedule's hours on that date.
 3. **Minus blocked time.** Every `ACTIVE` blocked time is expanded the same way
    and subtracted, whatever schedule it overlaps.
 4. **Minus bookings.** Every booking of the supplier that isn't `CANCELLED`
    occupies its time.
-5. **Minus active holds.** A hold occupies time exactly like a booking until it
-   lapses or converts.
+5. **Minus active holds.** A [hold](/resources/holds) occupies time exactly
+   like a booking until it lapses or converts.
 
 Busy events from a connected Google Calendar are subtracted too. Travel time
 and buffers around bookings are applied on top. `INACTIVE` and deleted rows are

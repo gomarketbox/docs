@@ -54,9 +54,9 @@ response. Keep the window to a day or a week.
 
 | `expand` value | Adds | Notes |
 | --- | --- | --- |
-| `client` | `client`: `displayName`, plus `email` and `phone` | Shown as the service's settings let suppliers see clients: for example `"Jordan L."`, and no email or phone. `null` when the client's profile can't be read. |
+| `client` | `client`: `displayName`, plus `email` and `phone` | Shown as the service's settings let suppliers see clients: for example `"Jordan L."`, and no email or phone. `null` when the [client](/resources/clients)'s profile can't be read. |
 | `services` | `services`: `name` (the first service) and `count` | |
-| `package` | `package`: `{ credit: "HELD", position, total }` or `{ credit: "RETURNED", total }` | For "Session 3 of 10". `null` when the booking isn't from a package. |
+| `package` | `package`: `{ credit: "HELD", position, total }` or `{ credit: "RETURNED", total }` | For "Session 3 of 10". `null` when the booking isn't from a [package](/resources/packages). |
 | `location` | `location`: `name` and `addressOneLine` | For `PHYSICAL` bookings at a venue. |
 | `participants` | `participants`: `labels` and `count` | `labels: null` means show a placeholder from `count`, not an empty list. |
 | `myReport` | `myReport`: `reportable`, `filed`, `attended` | The supplier's own attendance report. See [After the booking ends](#after-the-booking-ends). |
