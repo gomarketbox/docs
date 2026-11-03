@@ -1,0 +1,337 @@
+---
+title: Holds
+description: Temporarily reserved supplier time — the object a checkout places, extends, converts into bookings or releases.
+---
+
+A **hold** reserves a supplier's time for a short while. Nobody else can
+book or hold that time until the hold is converted into bookings, released,
+or lapses. Its id is a `reservationId`, `resv_…`.
+
+A hold is how a checkout keeps a slot while the client pays. For the
+step-by-step flow, with code, see
+[Hold slots during checkout](/guides/hold-slots-for-checkout). This page is
+the reference for the object and its routes.
+
+Every holds route takes the API key alone. Call them from your server, never
+from the browser.
+
+<Warning>
+**If you hold, you convert.** `POST /bookings` and
+`POST .../orders/{orderId}/package-bookings` never use a hold, not even your
+own. Called for time you hold, they return `409 SLOT_HELD`. Once you hold
+time, the only way to book it is `POST /holds/{reservationId}/convert`. See
+[Handling a held slot](/guides/hold-slots-for-checkout#handling-a-held-slot).
+</Warning>
+
+## The hold lifecycle
+
+```
+          ┌──► CONVERTED   (convert: bookings made)
+HELD ─────┤
+          └──► RELEASED    (release: time freed)
+```
+
+| Status | Meaning |
+| --- | --- |
+| `HELD` | Reserved. It blocks the supplier's time until `heldUntil`. |
+| `CONVERTED` | Booked. Converting again replays the same bookings. |
+| `RELEASED` | Freed. It blocks nothing. |
+
+Both `CONVERTED` and `RELEASED` are final. A hold can't be extended or
+converted out of either.
+
+**Expiry is lazy.** Nothing happens at `heldUntil`. The hold simply stops
+blocking, and still reads `HELD`. Compare `heldUntil` with the current time
+rather than trusting `status` alone. Converting after `heldUntil` is a
+`409 HOLD_EXPIRED`.
+
+## Anatomy of a hold
+
+The holds routes return the hold itself, not wrapped in `data`:
+
+```json
+{
+  "reservationId": "resv_01kv8p20m1gnqvxl92xln6awk8",
+  "status": "HELD",
+  "heldUntil": "2026-07-15T13:10:00.000Z",
+  "intervals": [
+    {
+      "supplierId": "sup_01kv60qgnef2kt3pvqgwmkbzfr",
+      "startUtc": "2026-07-15T14:00:00.000Z",
+      "endUtc": "2026-07-15T15:00:00.000Z",
+      "bookingTz": "America/Toronto",
+      "locationType": "PHYSICAL",
+      "locationId": "loc_01kx16f2a0h8a2my9u3f4tv0sp",
+      "latitude": null,
+      "longitude": null,
+      "address": null
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `reservationId` | The id. Keep it: you extend, convert and release by it. |
+| `status` | `HELD`, `CONVERTED` or `RELEASED`. |
+| `heldUntil` | When the hold stops blocking. |
+| `intervals[]` | The supplier time held, one entry per session. |
+| `intervals[].supplierId`, `startUtc`, `endUtc` | Whose time, and when. `endUtc` is exclusive. |
+| `intervals[].bookingTz` | The session's IANA time zone. The booking's local times are worked out from it at convert. |
+| `intervals[].locationType`, `locationId`, `latitude`, `longitude`, `address` | Where the session happens. A `PHYSICAL` session names a Location, `loc_…`. A `TRAVEL_ZONE` session names the supplier's travel zone, `stz_…`, and carries the client's coordinates and address. A `VIRTUAL` session has none. |
+
+Convert builds the bookings from the hold alone. So the intervals must already
+carry everything a booking needs. `GET /holds/{reservationId}` shows you
+exactly what convert will read.
+
+A hold also has an owner, `heldBy`. It isn't returned, so keep the value you
+sent.
+
+## Placing a hold
+
+`POST /v1/projects/{projectId}/holds` takes exactly one of three forms:
+
+| Form | Holds |
+| --- | --- |
+| `intervals` | Supplier time you name, one entry per session. Use it for a single session. Each interval needs `supplierId`, `startUtc`, `endUtc`, `bookingTz` and `locationType`, plus the location fields that type requires. See [Interval fields](/guides/hold-slots-for-checkout#interval-fields-the-intervals-form). |
+| `slateId` | Every slot of a slate from `POST /availability/package-slate`. |
+| `slotIds` | The slots you pick from a slate. |
+
+Sending none, or more than one, is a `400 VALIDATION_ERROR`.
+
+The other fields are optional:
+
+| Field | Meaning |
+| --- | --- |
+| `heldBy` | Who owns the hold, usually your checkout session id. Defaults to the identity of your API key. Keep it the same for the whole checkout. |
+| `holdDurationMins` | How long to hold, in minutes. Defaults to the project's `suggestionConfig.holdDurationMins`, then 5. |
+| `reservationId` | Extend this hold instead of placing a new one. See [Extending a hold](#extending-a-hold). |
+
+The `201` returns the hold. Every interval is held in one write, so a hold is
+all or nothing: you never hold 3 sessions of a 5-session slate.
+
+Time already held or booked is a `409`. The body names what's in the way:
+
+```json
+{
+  "code": "SLOT_HELD",
+  "message": "Supplier time is not available: HOLD resv_01kv8p20m1gnqvxl92xln6awk8 (2026-07-15T14:00:00.000Z–2026-07-15T15:00:00.000Z)",
+  "statusCode": 409,
+  "requestId": "a3f1c2de-9b64-4a2f-8f0e-5c9d1b7a2e10",
+  "conflicts": [
+    {
+      "claimType": "HOLD",
+      "supplierId": "sup_01kv60qgnef2kt3pvqgwmkbzfr",
+      "startUtc": "2026-07-15T14:00:00.000Z",
+      "endUtc": "2026-07-15T15:00:00.000Z",
+      "reservationId": "resv_01kv8p20m1gnqvxl92xln6awk8",
+      "bookingId": null,
+      "heldUntil": "2026-07-15T13:10:00.000Z"
+    }
+  ],
+  "hint": "This time is held (reservation resv_01kv8p20m1gnqvxl92xln6awk8). Convert the hold via POST /v1/projects/{projectId}/holds/{reservationId}/convert, or release it with POST /v1/projects/{projectId}/holds/{reservationId}/release. Direct booking routes will not consume a hold — if you hold, you convert."
+}
+```
+
+`SLOT_BOOKED` has the same shape, with `claimType: "BOOKING"` and a
+`bookingId`. Search availability again: a booking won't move.
+
+Holding time you already hold, under the same `heldBy`, doesn't conflict with
+your own hold. Without `reservationId` it places a new hold, though, with a
+new id, and the earlier hold loses that time. The earlier hold still reads
+`HELD` but blocks nothing, and converting it is a `409 SLOT_HELD` naming the
+new hold. To keep one hold for the whole checkout, extend it.
+
+## Extending a hold
+
+To keep a hold alive while the client pays, repeat the `POST /holds` call with:
+
+- the same intervals the hold already covers;
+- the same `heldBy`;
+- the hold's `reservationId`.
+
+`heldUntil` moves out, the same `reservationId` comes back, and no second hold
+is made. This is the checkout heartbeat, step 3 of
+[Hold slots during checkout](/guides/hold-slots-for-checkout#how-it-works).
+
+The extend is refused with a `409` when the hold can't be extended:
+
+| `code` | Meaning |
+| --- | --- |
+| `RESERVATION_NOT_FOUND` | No hold has that `reservationId` in this project. Leave `reservationId` out to place a new one. |
+| `RESERVATION_NOT_HELD` | The hold is already `CONVERTED` or `RELEASED`. Place a new one, or, if it converted, you're already booked. |
+| `RESERVATION_FORBIDDEN` | The `heldBy` you sent isn't the hold's owner. A `heldBy` you left out counts as your API key's identity. |
+
+```json
+{
+  "code": "RESERVATION_FORBIDDEN",
+  "message": "Reservation resv_01kv8p20m1gnqvxl92xln6awk8 is held by another session",
+  "statusCode": 409,
+  "requestId": "7b2e9c4a-1d6f-4a38-b5e0-3f8c1a7d2e64"
+}
+```
+
+## Reading a hold
+
+`GET /v1/projects/{projectId}/holds/{reservationId}` returns the hold. An
+unknown `reservationId` is a `404`:
+
+```json
+{
+  "code": "NOT_FOUND",
+  "message": "Reservation resv_01kv8p20m1gnqvxl92xln6awk8 not found",
+  "statusCode": 404,
+  "requestId": "2c8f4a1e-6b3d-4e97-a0c5-9d1e7b3f2a48"
+}
+```
+
+Read the hold first when a convert fails. Most failures are an interval that
+lacks the field the booking needs.
+
+## Converting a hold
+
+`POST /v1/projects/{projectId}/holds/{reservationId}/convert` turns the hold
+into bookings:
+
+```json
+{
+  "orderId": "ord_01kv7n10k0fnptwk81wkm59vj7",
+  "orderItemId": "oi_01kv7n10k0fnptwk81wkm59vj7",
+  "heldBy": "checkout_9f2c1b"
+}
+```
+
+The **order item's** `skuType` decides what's booked:
+
+- A `SINGLE_SESSION` item books the hold's one interval as a single booking. A
+  hold with more than one interval is a `409 RESERVATION_MULTI_INTERVAL`.
+- A `PACKAGE` item books every interval as a session of the package, drawing
+  one session each from the item.
+- Any other `skuType` is a `400 UNSUPPORTED_SKU_TYPE`.
+
+The client comes from the order, and the service and offering from the order
+item. So a booking and the session it draws down always agree.
+
+`heldBy` is optional here. If you send it, it must be the hold's owner, or the
+convert is a `409 RESERVATION_FORBIDDEN`.
+
+`atomicity` is `all_or_nothing` by default: every session books, or none
+does. `best_effort` books what it can, and needs the project's
+`suggestionConfig.allowPartialPackages`.
+
+The `201` isn't wrapped in `data`:
+
+```json
+{
+  "orderId": "ord_01kv7n10k0fnptwk81wkm59vj7",
+  "orderItemId": "oi_01kv7n10k0fnptwk81wkm59vj7",
+  "packageOrderItemId": "oi_01kv7n10k0fnptwk81wkm59vj7",
+  "atomicity": "all_or_nothing",
+  "created": [
+    { "sessionIndex": 0, "bookingId": "bk_01kv8q4m2d7b3fz6w1xhn9ce5r", "allocationId": "alloc_01kv8q4m2d7b3fz6w1xhn9ce5s" }
+  ],
+  "failed": [],
+  "quantityRemaining": 0
+}
+```
+
+`created[].sessionIndex` is 0-based. The client and supplier get their booking
+emails on the first convert, not on a replay. Two first converts racing each
+other can both send them.
+
+### Convert is idempotent
+
+Convert is safe to retry. A hold that's already `CONVERTED` returns the same
+result again, and books nothing. That holds even when two calls race. Retry a
+timeout or a `409 OCCUPANCY_CONTENTION` with the same request.
+
+### Convert doesn't check payment
+
+The order need not be `PAID`. You choose when to convert: after
+`GET /orders/{orderId}` reads `PAID`, or as soon as the client's payment is
+confirmed in the browser, if the hold might lapse first. The public API sends
+no webhooks. See
+[Tracking state without webhooks](/concepts/tracking-state-without-webhooks#an-order-becomes-paid).
+
+In a client's own flow, convert a package hold only once the order is `PAID`.
+A client books their package sessions only from a paid order.
+
+A `CANCELLED` order converts nothing, not even as a replay, because its
+cascade released its sessions:
+
+```json
+{
+  "code": "ORDER_CANCELLED",
+  "message": "Order ord_01kv7n10k0fnptwk81wkm59vj7 is CANCELLED",
+  "statusCode": 409,
+  "requestId": "4d9a2f7c-8e1b-4b63-a5d0-6c2e9f1a3b75"
+}
+```
+
+## Releasing a hold
+
+`POST /v1/projects/{projectId}/holds/{reservationId}/release` frees the time
+at once. Call it when the client abandons checkout, instead of waiting for
+the hold to lapse.
+
+It always answers `200`, with the hold's `status` after the call:
+
+| `status` | Meaning |
+| --- | --- |
+| `RELEASED` | Freed now, or already released before. |
+| `CONVERTED` | Already booked. Release doesn't undo bookings. Cancel them instead. |
+| `NOT_FOUND` | No hold has that id. |
+
+```json
+{ "reservationId": "resv_01kv8p20m1gnqvxl92xln6awk8", "status": "RELEASED" }
+```
+
+## Refusals
+
+The most common refusals, by route. The full list, with what to do about each,
+is in [Troubleshooting](/guides/hold-slots-for-checkout#troubleshooting).
+
+| Route | Status | `code` | Meaning |
+| --- | --- | --- | --- |
+| Place, extend | `400` | `VALIDATION_ERROR` | Not exactly one form, or an interval missing `bookingTz`, `locationType` or a location field its type needs. |
+| Place, extend | `404` | `NOT_FOUND` | An interval names a supplier that isn't in this project. |
+| Place, extend | `409` | `SLOT_HELD`, `SLOT_BOOKED` | Someone else holds or has booked the time. |
+| Place, extend | `409` | `SLOT_NOT_FOUND`, `SLATE_NOT_FOUND`, `EMPTY_SLATE` | The slate or slots are unknown, or the slate has no slots. Plan a new slate. |
+| Extend, convert | `409` | `RESERVATION_NOT_FOUND`, `RESERVATION_NOT_HELD`, `RESERVATION_FORBIDDEN` | Unknown hold, a hold already released (or, on extend, converted), or another owner. See [Extending a hold](#extending-a-hold). |
+| Convert | `400` | `INVALID_ORDER_REFERENCE` | The `orderId` isn't an order in this project. |
+| Convert | `400` | `MISSING_BOOKING_TZ` | The hold carries no time zone. Only holds placed before `bookingTz` was required. Release and hold again. |
+| Convert | `404` | `NOT_FOUND` | The `orderItemId` isn't on that order, or the item's offering or the held Location no longer exists. |
+| Convert | `422` | `UNPROCESSABLE_ENTITY` | The held `PHYSICAL` Location has no coordinates. The business fixes the Location. |
+| Convert | `409` | `HOLD_EXPIRED` | You converted after `heldUntil`. Hold again. |
+| Convert | `409` | `RESERVATION_MULTI_INTERVAL` | A `SINGLE_SESSION` item and a hold of more than one interval. |
+| Convert | `409` | `ORDER_CANCELLED` | The order is `CANCELLED`. |
+| Convert | `422` | `OFFERING_NOT_PRICED` | The item's offering has no `DEFAULT` price rule. |
+| Any write | `409` | `OCCUPANCY_CONTENTION` | Heavy concurrent writes on the supplier's day. Retry after a short, jittered pause. |
+
+Holds don't enforce a slate's 24-hour window. A `slateId` or `slotIds` older
+than that can still be held, but its times may be stale. Plan a new slate
+rather than holding an old one.
+
+<Warning>
+**Some package refusals are a `500` on convert today.** Convert doesn't map
+these four to their own codes, so each comes back as `500 INTERNAL_ERROR`:
+
+- the `PACKAGE` order item has fewer sessions left than the hold has
+  intervals;
+- the package has expired;
+- `atomicity: "best_effort"` without the project's
+  `suggestionConfig.allowPartialPackages`;
+- more than 15 sessions with `atomicity: "all_or_nothing"`.
+
+Nothing is booked. Retrying won't help. Before you convert a package hold,
+check the item's `quantityRemaining` and `expiresAt` on
+`GET /orders/{orderId}/aggregate`.
+</Warning>
+
+## Endpoint index
+
+- `POST /v1/projects/{projectId}/holds`
+- `GET  /v1/projects/{projectId}/holds/{reservationId}`
+- `POST /v1/projects/{projectId}/holds/{reservationId}/convert`
+- `POST /v1/projects/{projectId}/holds/{reservationId}/release`
+- `POST /v1/projects/{projectId}/availability/package-slate` — see [Availability and slates](/guides/availability-and-slates)

@@ -472,7 +472,7 @@ let you re-use it.
 | --- | --- | --- | --- |
 | `/v1/projects/{projectId}/orders/{orderId}/payment-intent` | `POST` | `x-api-key` | Create (or reuse) the PaymentIntent for an order. Returns `clientSecret`. |
 | `/v1/projects/{projectId}/orders/{orderId}` | `GET` | `x-api-key` | Read the order; poll `status` for `PAID`. |
-| `/v1/projects/{projectId}/transactions?orderId=` | `GET` | `x-api-key` | The order's transaction ledger. |
+| `/v1/projects/{projectId}/transactions?orderId=` | `GET` | `x-api-key` | The order's transaction ledger. See [Transactions](/resources/transactions). |
 | `/v1/projects/{projectId}/clients/me` | `POST` | `x-api-key` + user JWT | Idempotent. Returns the client profile, including `lastPayment` (see [above](#show-the-card-a-client-last-paid-with)). |
 
 ### Configuration

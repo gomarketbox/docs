@@ -1,0 +1,506 @@
+---
+title: Services and offerings
+description: The catalog objects a booking is made from — services, the business models that say how they're sold, and the offerings that carry duration and price.
+---
+
+A **service** is the thing you sell, such as "Private swim lesson". On its own
+it sells nothing. Two kinds of record hang off it:
+
+- **Business models** say how the service may be sold: one session at a
+  time, as a package, and so on.
+- **Offerings** are the bookable variants. Each one carries a duration and a
+  price. A client books an offering, never a bare service.
+
+A **package** is a prepaid bundle of sessions of one offering. Packages have
+their own page: see [Packages](/resources/packages).
+
+```
+service (srv_)
+├── business models (bm_)   how it's sold
+└── offerings (off_)        duration + price
+    └── packages (pkg_)     prepaid sessions of one offering
+```
+
+To set all of this up in order, follow
+[Provision your catalog and suppliers](/guides/provision-catalog-and-suppliers).
+This page is the reference for each object.
+
+## The service lifecycle
+
+A new service is always `DRAFT`, whatever you send on create.
+
+```
+DRAFT ──► LIVE ◄──► INACTIVE
+  │                    ▲
+  └────────────────────┘
+```
+
+`POST /v1/projects/{projectId}/services/{serviceId}/status` moves it:
+
+- `DRAFT` → `LIVE`, `INACTIVE`
+- `LIVE` → `INACTIVE`
+- `INACTIVE` → `LIVE`
+
+Nothing goes back to `DRAFT`. To keep working on a service privately after
+you publish it, set it `INACTIVE`. Any other move, including `LIVE` to
+`LIVE`, is a `400`, and nothing changes:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Cannot transition service status from LIVE to DRAFT",
+  "statusCode": 400,
+  "requestId": "2b7e4c1a-9d3f-4a68-b5e0-7c1f3a9d2e46"
+}
+```
+
+Publishing checks nothing else. A service with no offerings and no business
+models goes `LIVE`.
+
+### What the status controls
+
+`LIVE` is what makes a service visible. A supplier's `services`, on
+`GET /suppliers`, on a supplier's profile and on every search result, lists
+only `LIVE` services. A `DRAFT` or `INACTIVE` service stays linked to its
+suppliers but doesn't appear. A status change can take up to a minute to show
+there.
+
+**The status doesn't gate orders or bookings.** `POST /orders`,
+`POST .../orders/{orderId}/items`, `POST /bookings` and hold conversion check
+the **offering's** status, not the service's. An `ACTIVE` offering of a
+`DRAFT` or `INACTIVE` service can still be ordered and booked through the API.
+So:
+
+- Show clients only services you listed with `status=LIVE`.
+- To stop a service selling, set its offerings `INACTIVE` as well as the
+  service. See [The offering lifecycle](#the-offering-lifecycle).
+
+Bookings and orders already placed are never touched by a status change.
+
+### Deleting a service
+
+`DELETE /v1/projects/{projectId}/services/{serviceId}` is a soft-delete. The
+service is set `INACTIVE` and disappears from lists and reads, so a `GET` of
+it is a `404`. The record is kept, so bookings and orders against it still
+resolve.
+
+Deleting releases the service's name at once, so a new service can take it.
+That is how you free a name you typed wrong.
+
+Offerings aren't deleted with the service. They keep their own status and
+stay readable one by one. Set them `INACTIVE` first if anything of yours reads
+offerings without checking the service.
+
+## Anatomy of a service
+
+| Field | Meaning |
+| --- | --- |
+| `serviceId` | The id, `srv_…`. |
+| `name`, `description` | Localized text: one string per language code, such as `{ "en": "Private swim lesson" }`. |
+| `primaryLanguage` | The language code whose `name` is the canonical one. |
+| `primaryName` | `name` in `primaryLanguage`, as a plain string. |
+| `status` | `DRAFT`, `LIVE` or `INACTIVE`. |
+| `categoryId`, `categorySnapshot` | The service's category. `categorySnapshot` carries the category's name only when the category was created inline with `newCategory`; otherwise its names are empty. It isn't refreshed when `categoryId` changes. |
+| `taxSettings` | `{ taxable, taxPercentage }`. The last fallback for tax when no price rule sets it. See [How tax is computed](/resources/orders#how-tax-is-computed). |
+| `participantSettings` | What suppliers and clients may do with, and see on, bookings of this service. See [Participant settings](/concepts/booking-engine-model#participant-settings). |
+| `counts.offerings` | How many offerings the service has. Use it to decide whether to fetch them. |
+| `createdAt`, `updatedAt`, `createdBy`, `updatedBy` | Audit fields. |
+
+`GET /v1/projects/{projectId}/services/{serviceId}` returns the service on its
+own. Offerings, business models and packages are separate reads, so pricing
+and duration always take a second call.
+
+A service has no `externalId`. Store the `serviceId` against your own record.
+
+## Creating a service
+
+`POST /v1/projects/{projectId}/services`:
+
+```json
+{
+  "name": { "en": "Private swim lesson" },
+  "description": { "en": "One-to-one coaching in your pool." },
+  "primaryLanguage": "en",
+  "taxSettings": { "taxable": true, "taxPercentage": 13 },
+  "businessModels": [
+    { "type": "SINGLE_BOOKING", "paymentOptions": ["PAY_WHILE_BOOKING"] }
+  ]
+}
+```
+
+- `name` and `primaryLanguage` are required.
+- `businessModels` creates the service's business models in the same call.
+  Each one takes the same fields as
+  [Adding a business model](#adding-a-business-model).
+- `taxSettings` defaults to `{ "taxable": false }`.
+
+Names are unique in a project, per language. The comparison ignores case,
+surrounding spaces and repeated spaces, but not accents or punctuation. A
+duplicate is a `409`, and nothing is written:
+
+```json
+{
+  "code": "CONFLICT",
+  "message": "A service with this name already exists in the project",
+  "statusCode": 409,
+  "requestId": "6c2a9f4e-1b7d-4e83-a5d0-3f8b1c7e9a25"
+}
+```
+
+The catalog routes take no idempotency key. The unique name protects a
+service from a retried create, but not an offering, business model or
+package. After a timeout, list what exists before you retry.
+
+## Updating a service
+
+`PUT /v1/projects/{projectId}/services/{serviceId}` changes the descriptive
+fields. Send only the fields you're changing, but send each one whole:
+
+- `name` and `description` replace the stored map. Send every language you
+  want to keep, or the ones you leave out are dropped.
+- `participantSettings` replaces the stored object. Send every field. The one
+  exception is `client.participantDisplay`: leave it out and the stored value
+  stays.
+- A new name in `primaryLanguage` is checked for uniqueness again. A clash is
+  the same `409 CONFLICT`, and nothing else in the update is applied either.
+- A name changed only in another language isn't checked, and isn't reserved.
+- Renaming the `primaryLanguage` name while keeping another language's name
+  unchanged fails today with a `500`. Change the primary name on its own, or
+  every language at once.
+
+`status` isn't settable here. Use the status route.
+
+## Listing services
+
+`GET /v1/projects/{projectId}/services` returns the whole catalog in one
+response, sorted by name within each status. It isn't paginated:
+`nextCursor` is always `null` and there's no `limit`.
+
+| Query | Effect |
+| --- | --- |
+| `status` | Only services in that status. Send `status=LIVE` for anything a client sees. |
+| `categoryId` | Only services in that category. |
+
+Without `status`, `DRAFT` and `INACTIVE` services are included. Deleted
+services never are. The list also accepts a `search` parameter, but doesn't
+apply it today: filter by name on your side.
+
+## Business models
+
+A **business model** says one way a service may be sold. An order line needs
+an active business model that matches it, or it's refused.
+
+| `type` | Sells | Satisfies an order line of |
+| --- | --- | --- |
+| `SINGLE_BOOKING` | One session at a time. | `SINGLE_SESSION` |
+| `PACKAGE` | Prepaid sessions drawn down by later bookings. Required to **create** a package. | `PACKAGE` |
+| `SCHEDULED_PACKAGE` | A package on a recurring schedule. | `PACKAGE` (only when there is no active `PACKAGE` model) |
+| `SCHEDULED_SUBSCRIPTION`, `FLEXIBLE_SUBSCRIPTION` | Subscriptions. | `SUBSCRIPTION` |
+
+### Anatomy of a business model
+
+| Field | Meaning |
+| --- | --- |
+| `businessModelId` | The id, `bm_…`. |
+| `serviceId` | The service it belongs to. |
+| `type` | One of the types above. Fixed at creation. |
+| `paymentOptions` | When money is taken: `PAY_WHILE_BOOKING`, `PAY_AFTER_SERVICE_DELIVERED`, `NO_PAYMENT`, `PAY_FULL_PRICE_WHILE_PURCHASING`, `PAY_BEGINNING_OF_MONTH` or `PAY_END_OF_MONTH`. At least one. |
+| `fees` | Service fees charged on order lines sold under this model. See [Service fees](/concepts/service-fees). |
+| `config` | A free-form object. No field in it has a meaning today. |
+| `active` | `true` or `false`. A business model has no `status` field. |
+
+### Adding a business model
+
+`POST /v1/projects/{projectId}/services/{serviceId}/business-models`:
+
+```json
+{
+  "type": "PACKAGE",
+  "paymentOptions": ["PAY_FULL_PRICE_WHILE_PURCHASING"]
+}
+```
+
+The business model is created active.
+
+**Business models aren't de-duplicated.** Posting the same `type` twice
+leaves two rows, both active. List the service's business models before you
+add one:
+
+```
+GET /v1/projects/{projectId}/services/{serviceId}/business-models
+```
+
+The list includes inactive models, so read `active` on each. It isn't
+paginated.
+
+### Changing a business model
+
+- `PUT .../business-models/{businessModelId}` edits `paymentOptions`, `fees`
+  and `config`. Each one you send replaces the stored value whole. Send
+  `"fees": []` to clear the fees. Leave a field out to keep it.
+- `POST .../business-models/{businessModelId}/status` with
+  `{ "active": false }` turns the model off, and `{ "active": true }` turns it
+  back on. Its type, payment options and fees are kept either way.
+- `type` can't be changed. To sell the service another way, turn this model
+  off and add a new one.
+- There is no delete. Turn the model off instead.
+
+A fee on an inactive business model is stored but never charged, because an
+order line resolves only against active models.
+
+Neither route checks that the `businessModelId` exists. A mistyped id writes
+a new, partial record instead of returning `404`. Use the ids from the
+create response or the list.
+
+**Turning off the `PACKAGE` model does more than stop new packages.** While
+the service has no active `PACKAGE` model:
+
+- A package can't be created: `400 BAD_REQUEST`.
+- A `PACKAGE` order line is `422 SERVICE_NOT_SOLD_AS`, unless the service has
+  an active `SCHEDULED_PACKAGE` model.
+- Sessions of packages clients already bought can't be booked, through
+  package bookings or hold conversion:
+
+```json
+{
+  "code": "NOT_A_PACKAGE_SERVICE",
+  "message": "Service srv_01kv60qg12e82acr78edfnjhvv has no active PACKAGE business model",
+  "statusCode": 400,
+  "requestId": "7f3c9a2e-4b1d-4e68-a5c0-2d8f6b1e9a37"
+}
+```
+
+To stop selling one package, archive it instead. See
+[The package lifecycle](/resources/packages#the-package-lifecycle).
+
+### A line with no active business model
+
+An order line whose service has no active business model of the right type is
+refused on `POST /orders` and on `POST .../orders/{orderId}/items`. Each
+returns a `422`:
+
+```json
+{
+  "code": "SERVICE_NOT_SOLD_AS",
+  "message": "Service srv_01kv60qg12e82acr78edfnjhvv is not sold as a package; it has no active PACKAGE or SCHEDULED_PACKAGE rate",
+  "statusCode": 422,
+  "requestId": "9a4f1c7e-3b2d-4d85-a6e0-1c8b5f2d7e39"
+}
+```
+
+For a `SINGLE_SESSION` line the message names `SINGLE_BOOKING`. Nothing is
+written. Add or reactivate the business model, then retry.
+
+## Offerings
+
+An **offering** is what a client actually books: a duration and a price.
+Every booking and order line names one.
+
+### The offering lifecycle
+
+An offering is created `ACTIVE`. There is no draft step.
+
+```
+ACTIVE ◄──► INACTIVE
+```
+
+`POST /v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}/status`
+with `{ "status": "INACTIVE" }` takes it off sale, and `ACTIVE` puts it back.
+Either move is allowed at any time.
+
+Only an `ACTIVE` offering can be ordered or booked. An order line for an
+`INACTIVE` one is a `400`:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Offering off_01kv60qgs4e4nbjhzradnqtj0h is not orderable (status: INACTIVE)",
+  "statusCode": 400,
+  "requestId": "4e8b2d6a-7c1f-4a93-b0d5-2a9e6c3f1b74"
+}
+```
+
+`POST /bookings` and hold conversion answer the same way, with
+`is not bookable` in the message. Bookings already made against the offering
+stand.
+
+### Anatomy of an offering
+
+| Field | Meaning |
+| --- | --- |
+| `offeringId` | The id, `off_…`. |
+| `serviceId` | The service it belongs to. |
+| `name` | Optional localized text, such as `{ "en": "60 minutes" }`. |
+| `duration` | `FIXED` with `minutes`, or `FLEXIBLE` with `defaultMinutes`, `minMinutes`, `stepMinutes` and an optional `pricePerStep`. |
+| `pricing` | The price rules. See [Pricing rules](#pricing-rules). |
+| `skillIds`, `skills` | The skills a supplier needs to deliver this offering. `skills` is the same list with names. |
+| `locationIds`, `locations` | The Locations the offering is available at. `locations` is the same list with names and addresses. |
+| `attributeValues` | The offering's values for the service's attributes. |
+| `status` | `ACTIVE` or `INACTIVE`. |
+| `holdDurationMinsOverride` | Accepted on create and update but not stored today, so it always reads back empty and never changes how long a hold lasts. |
+
+`skills` and `locations` come back on the list and on the single read. An id
+that no longer resolves, such as an inactive skill, is left out of `skills`,
+so it can be shorter than `skillIds`.
+
+### Pricing rules
+
+`pricing` is a list of rules, not a single amount. Each rule has a `ruleId`
+you choose, a `scope` and a `price`:
+
+```json
+{
+  "name": { "en": "60 minutes" },
+  "duration": { "type": "FIXED", "minutes": 60 },
+  "pricing": [
+    { "ruleId": "default", "scope": "DEFAULT", "price": { "amount": 4500, "currency": "CAD" } },
+    { "ruleId": "us", "scope": "COUNTRY", "country": "US", "price": { "amount": 3500, "currency": "USD" } }
+  ]
+}
+```
+
+- **Amounts are integer minor units.** `4500` is $45.00. A decimal is a
+  `400 VALIDATION_ERROR`.
+- **Exactly one `DEFAULT` rule.** It's the price wherever no more specific
+  rule matches, in its own currency.
+- **A child rule needs its parent.** A `STATE` rule needs a `COUNTRY` rule for
+  the same country. A `POSTAL` rule needs the `STATE` rule for its state.
+- **One rule per region.** Two `COUNTRY` rules for the same country are
+  refused.
+- **Country and state are stored as ISO codes.** You can send `"Canada"` or
+  `"Ontario"`. They're stored as `CA` and `ON`, so read the offering back
+  rather than assuming your spelling survived.
+
+The most specific matching rule wins: `POSTAL`, then `STATE`, then `COUNTRY`,
+then `DEFAULT`. See [Regional pricing](/concepts/regional-pricing).
+
+A rule set that breaks one of these is a `400`, and nothing is written. The
+`message` names the rule's position:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "pricing: pricing must contain exactly one DEFAULT rule",
+  "statusCode": 400,
+  "requestId": "3c7f1a9e-6d2b-4e58-9a04-1f8c5d3b7e26"
+}
+```
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "pricing.1.state: State US/WA requires a country price for US",
+  "statusCode": 400,
+  "requestId": "8d2e6b1f-4a9c-4f37-b5e0-6c1a3d8f2b95"
+}
+```
+
+#### An offering with no DEFAULT rule
+
+Create and update refuse a rule set with no `DEFAULT` rule. An offering can
+still end up without one, for example a stub written by the status route to a
+mistyped id. Any write that prices such an offering returns a `422`:
+`POST /orders`, `POST .../orders/{orderId}/items`, `POST /bookings`, a package
+booking and hold conversion.
+
+```json
+{
+  "code": "OFFERING_NOT_PRICED",
+  "message": "Offering has no DEFAULT price rule",
+  "statusCode": 422,
+  "requestId": "5f1b8c3d-2e7a-4b96-a0c4-9d6e2f7a1b38"
+}
+```
+
+It's a gap in the catalog, not in your request, so retrying won't help. Give
+the offering a `DEFAULT` rule with `PUT`.
+
+An offering created before regional pricing existed reads back with one
+`DEFAULT` rule whose `ruleId` is `r_legacy_default`. Treat it as real pricing.
+It's derived when the offering is read, so send a full `pricing` list when you
+next update the offering.
+
+### Creating an offering
+
+`POST /v1/projects/{projectId}/services/{serviceId}/offerings` takes the body
+above. `pricing` and `duration` are required.
+
+Every id in `skillIds` and `locationIds` must name an existing, active skill
+or Location in the project. Otherwise the whole call is a `400`:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Skill skl_01kv60qgs4e4nbjhzradnqtj0h not found or inactive",
+  "statusCode": 400,
+  "requestId": "1a7c3e9f-5b2d-4c86-b0e4-8f3d1a6c2e57"
+}
+```
+
+Take the ids from `GET /skills` and `GET /locations`. Both are read-only on the
+public API: see [Locations and skills](/resources/locations).
+
+A service id that doesn't exist is `404 NOT_FOUND`, `Service not found`. A
+deleted service isn't refused, and still takes new offerings.
+
+### Updating an offering
+
+`PUT .../offerings/{offeringId}` is a partial update, despite the verb. Only
+the fields you send are written.
+
+- An array you send replaces the stored one whole: `pricing`, `skillIds`,
+  `locationIds` and `attributeValues`. To add one skill, send the full new
+  list.
+- `pricing` is checked against the same rules as on create. A list that drops
+  the `DEFAULT` rule is a `400`.
+- An order item already placed keeps the price it was captured at. A new
+  price applies to new order lines only.
+
+Neither this route nor the status route checks that the `offeringId` exists.
+A mistyped id writes a new, partial record instead of returning `404`. Use the
+ids from the create response or the list.
+
+### Deleting an offering
+
+`DELETE .../offerings/{offeringId}` is a soft-delete. The offering is set
+`INACTIVE`, leaves the lists, and the service's `counts.offerings` drops by
+one. The record is kept, so bookings and order items that captured it still
+resolve. The API can't undo a delete.
+
+Delete doesn't check the id either. An unknown or already-deleted
+`offeringId` still returns `204`, and still lowers `counts.offerings`.
+
+Packages built on the offering aren't deleted with it, and keep selling. But
+sessions bought from them can no longer be booked: each booking is
+`404 NOT_FOUND`, `Offering off_… not found`. Archive those packages before you
+delete the offering. To take an offering off sale and keep the option of
+selling it again, use the status route instead.
+
+### Listing offerings
+
+`GET /v1/projects/{projectId}/services/{serviceId}/offerings` returns every
+offering of the service in one response. It isn't paginated: `nextCursor` is
+always `null`.
+
+Deleted offerings are left out. `INACTIVE` ones are included unless you send
+`status=ACTIVE`.
+
+## Endpoint index
+
+- `POST /v1/projects/{projectId}/services`
+- `GET  /v1/projects/{projectId}/services`
+- `GET  /v1/projects/{projectId}/services/{serviceId}`
+- `PUT  /v1/projects/{projectId}/services/{serviceId}`
+- `POST /v1/projects/{projectId}/services/{serviceId}/status`
+- `DELETE /v1/projects/{projectId}/services/{serviceId}`
+- `GET  /v1/projects/{projectId}/services/{serviceId}/business-models`
+- `POST /v1/projects/{projectId}/services/{serviceId}/business-models`
+- `PUT  /v1/projects/{projectId}/services/{serviceId}/business-models/{businessModelId}`
+- `POST /v1/projects/{projectId}/services/{serviceId}/business-models/{businessModelId}/status`
+- `POST /v1/projects/{projectId}/services/{serviceId}/offerings`
+- `GET  /v1/projects/{projectId}/services/{serviceId}/offerings`
+- `GET  /v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}`
+- `PUT  /v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}`
+- `POST /v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}/status`
+- `DELETE /v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}`
+- Packages, `.../offerings/{offeringId}/packages` and `/packages/{packageId}` — see [Packages](/resources/packages#endpoint-index)

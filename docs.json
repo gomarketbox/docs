@@ -68,11 +68,17 @@
           {
             "group": "Resources",
             "pages": [
-              "resources/bookings",
-              "resources/orders",
+              "resources/services",
+              "resources/packages",
+              "resources/clients",
               "resources/suppliers",
               "resources/locations",
               "resources/availability",
+              "resources/suggestions",
+              "resources/holds",
+              "resources/orders",
+              "resources/transactions",
+              "resources/bookings",
               "resources/reviews"
             ]
           }

@@ -184,7 +184,8 @@ address, `active`, timezone, service and skill ids, languages and locales.
    `GET /v1/projects/{projectId}/services?status=LIVE` and
    [`GET /v1/projects/{projectId}/skills`](/resources/locations#skills) with the
    API key alone. Without `status=LIVE`, the service list also holds `DRAFT`
-   and `INACTIVE` services, which clients can't book.
+   and `INACTIVE` services, which aren't published to clients. See
+   [What the status controls](/resources/services#what-the-status-controls).
 2. `PATCH /suppliers/me` with only the fields that changed. `200` returns the
    updated profile.
 

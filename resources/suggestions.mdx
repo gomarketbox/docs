@@ -1,0 +1,199 @@
+---
+title: Suggestions
+description: The plans the availability engine proposes for a package — suggestion requests, slates and slots — and the route that moves one slot before anything is booked.
+---
+
+A **suggestion** is the availability engine's proposal for when a package's
+sessions could happen. It's a hint, not a booking: nothing is reserved until
+you hold or book it.
+
+A suggestion has three levels:
+
+| Object | Id | What it is |
+| --- | --- | --- |
+| Suggestion request | `sugreq_…` | One planning call, and everything it proposed. |
+| Slate | `slate_…` | One complete plan: every session of the package, with one supplier. |
+| Slot | `slot_…` | One session of a slate: a supplier, a time and a place. |
+
+This page is the reference for these objects. For how a slate is planned and
+how to read one, see
+[Availability and slates](/guides/availability-and-slates).
+
+## Where suggestions come from
+
+Two routes plan slates:
+
+- `POST /v1/projects/{projectId}/availability/package-slate` plans one package,
+  or the sessions left on an order item. See
+  [Anatomy of a slate](/guides/availability-and-slates#anatomy-of-a-slate).
+- `POST /v1/projects/{projectId}/availability/package-options` plans every
+  `ACTIVE` package of a service in one call. See
+  [Show a package storefront](/guides/show-a-package-storefront).
+
+A planning call stores what it proposed unless you send `persist: false`. A
+stored suggestion comes back with a `suggestionRequestId`, and its slates and
+slots can be held or booked by id. A slate you didn't store can only be
+shown.
+
+## Suggestions expire after 24 hours
+
+A stored slate and its slots stay usable by id for **24 hours** from the
+planning call. The response's `resolvableUntil` says when.
+
+After that, every route that takes a `slateId` or `slotId` treats it as stale.
+Plan a new slate rather than retrying the old id.
+
+## What you can do with a slate
+
+| To | Call | With |
+| --- | --- | --- |
+| Hold its sessions while the client pays | `POST /holds` | `slateId`, or `slotIds` for some of them. See [Holds](/resources/holds). |
+| Book its sessions now | `POST /orders/{orderId}/package-bookings` | `slateId` or `slotIds`. See [Create a package booking](/guides/create-a-package-booking). |
+| Book it as the signed-in client | `POST /clients/me/orders/{orderId}/package-bookings` | `slateId` or `slotIds` of a slate planned from that client's own order item. Any other is a `404`. See [Book a client's package credit](/guides/book-a-package-credit). |
+| Move one session to another time | `POST /suggestions/slots/{slotId}/reschedule` | The new start. See [Rescheduling a slot](#rescheduling-a-slot). |
+
+Each of these routes re-checks the time when you call it. A slot that was free
+when it was planned may have been taken since.
+
+## Anatomy of a slate and a slot
+
+The field tables are in
+[Slate and slot fields](/guides/availability-and-slates#slate-and-slot-fields).
+The ones you use most:
+
+| Field | On | Meaning |
+| --- | --- | --- |
+| `slateId` | Slate | Hold or book the whole plan with it. |
+| `supplierId` | Slate, slot | The supplier. A slate has one. |
+| `completeness` | Slate | `COMPLETE` when every session is filled, `PARTIAL` when not. |
+| `sessionsRequested`, `sessionsFilled` | Slate | How many sessions were asked for, and how many the plan fills. |
+| `slots[]` | Slate | The sessions. |
+| `slotId` | Slot | Hold, book or reschedule one session with it. |
+| `sessionIndex` | Slot | The session's position, **1-based**. A booking response's `created[].sessionIndex` is 0-based. |
+| `bookingStartUtc`, `bookingEndUtc`, `bookingTz` | Slot | When, and the session's home time zone. |
+| `locationType`, `locationId`, `latitude`, `longitude`, `address` | Slot | Where. Holding or booking a slot copies these, so you send no location. |
+| `reservationStatus` | Slot | Deprecated. Always `FREE`. Holds reserve supplier time, not slots, so don't branch on it. |
+
+## Rescheduling a slot
+
+`POST /v1/projects/{projectId}/suggestions/slots/{slotId}/reschedule` moves one
+slot of a stored slate to a time the client picked, before anything is booked.
+It's the "can we do Thursday instead?" step. It doesn't touch bookings: to
+move a booking, see
+[Cancel or reschedule a booking](/guides/cancel-or-reschedule-a-booking).
+
+```json
+{ "bookingStartUtc": "2026-07-16T20:00:00.000Z" }
+```
+
+Only the start moves. The slot keeps its length, time zone, place and
+supplier.
+
+The new time is checked, not trusted:
+
+- It must be in the future.
+- The supplier must work then, with no booking or blocked time in the way.
+- No live hold or booking may cover it on the supplier's calendar.
+
+Travel time between this session and the ones around it isn't checked, and
+neither is a clash with the slate's other sessions.
+
+On success, the `200` returns the slot's id and the whole slate, with its
+totals worked out again:
+
+```json
+{
+  "slotId": "slot_01kx16ejsqffc9rbgdcc591w2q",
+  "slate": { "slateId": "slate_01kx16ejsqffc9rbgdcc591w2p", "slots": [] }
+}
+```
+
+(`slots[]` is abridged.) Show the slate from this response rather than
+patching the one slot on your side.
+
+**A reschedule reserves nothing.** It moves the suggestion only. To keep the
+new time for the client, hold the slate afterwards.
+
+**Reschedule before you hold or book, not after.** The route doesn't check
+whether the slot was already held or booked, because a slot's
+`reservationStatus` is always `FREE`. Moving a held or booked slot changes
+the slate only: the hold or booking keeps its old time. Two more things
+follow from the calendar check:
+
+- Your own hold counts as a conflict. Moving a slot into time you hold
+  yourself is `409 SLOT_HELD`.
+- Two reschedules of one slot at once can both succeed. The last one wins.
+
+The checks run in order: the slot exists, it's within its 24-hour window,
+then the new time is in the future, then the supplier is free.
+
+### When a reschedule is refused
+
+Nearly every refusal is a `409`, and the causes need different handling.
+Branch on `code`, not on the status.
+
+| Status | `code` | Meaning | What to do |
+| --- | --- | --- | --- |
+| `400` | `BAD_REQUEST` | `bookingStartUtc must be in the future`. | Send a future time. |
+| `400` | `VALIDATION_ERROR` | `bookingStartUtc` isn't an ISO-8601 instant. | Fix the value. |
+| `409` | `SLOT_TIME_UNAVAILABLE` | The supplier doesn't work then, or a booking or blocked time is in the way. | Offer another time. The slate is unchanged. |
+| `409` | `SLOT_HELD`, `SLOT_BOOKED` | A hold or a booking already covers the new time. The body names it in `conflicts[]`, as on [Placing a hold](/resources/holds#placing-a-hold). | Offer another time. |
+| `409` | `SLOT_NO_LONGER_FREE` | The slot or its slate was removed, or a concurrent write cancelled the move. | Retry once. |
+| `409` | `SLOT_NOT_FOUND` | No slot has that id. | Plan a new slate. |
+| `409` | `SUGGESTION_EXPIRED` | The slot is past its 24-hour window. | Show `freshSuggestions`. |
+| `409` | `SLOT_NOT_BOOKABLE`, `SLATE_NOT_FOUND` | The slot or its slate can no longer be used. | Show `freshSuggestions`. |
+
+`SLOT_TIME_UNAVAILABLE` names the supplier, the time and the length:
+
+```json
+{
+  "code": "SLOT_TIME_UNAVAILABLE",
+  "message": "Supplier sup_01kv60qgnef2kt3pvqgwmkbzfr is not available at 2026-07-16T20:00:00.000Z for 60 minutes",
+  "statusCode": 409,
+  "requestId": "5c2e8a1f-7d4b-4e69-b0a3-1f9d6c2e8b47"
+}
+```
+
+`SLOT_NO_LONGER_FREE` carries no suggestions:
+
+```json
+{
+  "code": "SLOT_NO_LONGER_FREE",
+  "message": "Slot slot_01kx16ejsqffc9rbgdcc591w2q could not be rescheduled (no longer FREE or not found)",
+  "statusCode": 409,
+  "requestId": "2f7a4c9e-1b6d-4a83-b5e0-8d3c1f7a2e96"
+}
+```
+
+The stale codes come with `freshSuggestions`: a new plan worked out from the
+original request, in the same shape as a `POST /availability/package-slate`
+response. Show it instead of starting a new search. It's `null` when no new
+plan could be made, as for `SLOT_NOT_FOUND`, which has no request to plan
+from:
+
+```json
+{
+  "code": "SUGGESTION_EXPIRED",
+  "message": "Slot slot_01kx16ejsqffc9rbgdcc591w2q is past its resolvable window",
+  "statusCode": 409,
+  "requestId": "8b1d5f3a-6c2e-4d97-a0b4-3e7f9c1a5d28",
+  "freshSuggestions": {
+    "status": "OK",
+    "suggestionRequestId": "sugreq_01kx19m3x7ab4c2d9e5f6g7h8j",
+    "primarySlate": { "slateId": "slate_01kx19m3x7ab4c2d9e5f6g7h8k", "slots": [] }
+  }
+}
+```
+
+(`freshSuggestions` is abridged.)
+
+A slate's cadence fields record how it was first planned. A reschedule
+doesn't recheck them, so a moved slate can drift from its own `cadenceRrule`.
+
+## Endpoint index
+
+- `POST /v1/projects/{projectId}/suggestions/slots/{slotId}/reschedule`
+- `POST /v1/projects/{projectId}/availability/package-slate` — see [Availability and slates](/guides/availability-and-slates)
+- `POST /v1/projects/{projectId}/availability/package-options` — see [Show a package storefront](/guides/show-a-package-storefront)
+- `POST /v1/projects/{projectId}/holds` — see [Holds](/resources/holds)
+- `POST /v1/projects/{projectId}/orders/{orderId}/package-bookings` — see [Create a package booking](/guides/create-a-package-booking)

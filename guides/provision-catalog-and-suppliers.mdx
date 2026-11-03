@@ -20,6 +20,10 @@ relative to the project: `POST /services` is
 `POST /v1/projects/{projectId}/services`. Ids come back on each create response:
 keep them, because the next step needs them.
 
+Each object has a reference page with every field and rule:
+[Services and offerings](/resources/services) covers services, business
+models and offerings, and [Packages](/resources/packages) covers packages.
+
 <Warning>
 **A retried create can make a duplicate.** The catalog routes take no
 idempotency key. A second `POST` of the same offering, business model or
@@ -183,8 +187,13 @@ one isn't enough to create a package:
 ```
 
 Put the package on sale with `POST /packages/{packageId}/status` and
-`{ "status": "ACTIVE" }`. `ARCHIVED` takes it off sale. List a service's packages with
+`{ "status": "ACTIVE" }`. `ARCHIVED` retires it. List a service's packages with
 `GET /services/{serviceId}/packages`.
+
+A package's status is a storefront flag. `POST /orders` doesn't check it, so
+an order line for a `DRAFT` or `ARCHIVED` package is accepted. Show clients
+only `status=ACTIVE` packages. See
+[The package lifecycle](/resources/packages#the-package-lifecycle).
 </Step>
 
 <Step title="Publish the service">
@@ -218,6 +227,10 @@ models and no prices goes `LIVE`. Publish last, once the steps above are done.
 
 Only a `LIVE` service appears in a supplier's `services` on
 `GET /suppliers` and in search results. A `DRAFT` one is linked but hidden.
+
+The service's status doesn't gate orders or bookings: those check the
+offering's status. See
+[What the status controls](/resources/services#what-the-status-controls).
 </Step>
 
 <Step title="Create the suppliers">
@@ -342,7 +355,9 @@ booking itself.
   full object, not only the changed language.
 - **Retire instead of deleting.** Set an offering `INACTIVE`, a package
   `ARCHIVED` and a service `INACTIVE`. Orders and bookings that already use
-  them keep their snapshot of the price.
+  them keep their snapshot of the price. An `INACTIVE` offering refuses new
+  single-session order lines and every new booking of it. A service's or
+  package's status changes what clients are shown, not what the API accepts.
 - **Lists aren't paginated.** `GET /services`, its offerings, business models
   and packages return everything in one page.
 
