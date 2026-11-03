@@ -36,6 +36,15 @@ A client's report that they didn't attend can now open a dispute. Booking writes
 
 - **`conflicts[].supplierId`** on `409 SLOT_HELD` / `SLOT_BOOKED`: the supplier whose calendar is blocked, `null` when unknown. It was in the schema but never sent.
 
+**What this means for you**
+
+- **Branch on `VERSION_CONFLICT` in your supplier portal.** Re-read the row and retry on it, and show an overlap message only on `CONFLICT`.
+- **Don't treat `COMPLETED` as final for 24 hours.** Anything you do once a session is delivered, such as payouts or follow-ups, should wait out the dispute window.
+- **Handle `DISPUTED` wherever you show a booking's status.** An operator resolves it in the MarketBox console; your key can't.
+- **Stop retrying booking writes that failed with a 500.** The same failures now arrive as a 4xx that says what to fix.
+
+Full detail: [Bookings → Attendance and disputes](/resources/bookings#attendance-and-disputes), [Bookings → Creating a booking](/resources/bookings#creating-a-booking), [Build a supplier portal → Set working hours](/guides/build-a-supplier-portal#set-working-hours), [Errors](/concepts/errors).
+
 </Update>
 
 <Update label="October 26, 2026" tags={["API"]}>
