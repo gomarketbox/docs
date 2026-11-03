@@ -1,0 +1,482 @@
+---
+title: Weekly hours, exceptions and seasons
+description: Model a supplier's real working year on the supplier plane — weekly hours, single days off, blocked time, seasonal schedules and a timezone move — and check the result with an availability search.
+---
+
+A supplier's working year is rarely one weekly pattern. They take a holiday,
+block a lunch hour, work longer days in summer, and sometimes move. This guide
+shows how to model each of those on the **supplier plane**, as the signed-in
+supplier, and how to check what clients will be offered.
+
+It builds on two guides:
+
+- [Build a supplier portal](/guides/build-a-supplier-portal) covers sign-in,
+  the two credentials, and the field rules for a schedule and a blocked time.
+  Read [Hours and blocked time](/guides/build-a-supplier-portal#hours-and-blocked-time)
+  first.
+- [Set up a mobile supplier's service area](/guides/set-up-a-mobile-supplier-service-area)
+  covers travel zones. Everything below applies to a schedule that names a
+  zone, too.
+
+Paths are relative to `/v1/projects/{projectId}/suppliers/me`. Every call takes
+your API key and the supplier's access token.
+
+## How availability is assembled
+
+For each supplier, MarketBox works out open time on every request, from the
+rows you write here:
+
+1. **Schedules.** Each `ACTIVE` schedule that serves the
+   [offering](/resources/services#offerings) at the requested place is
+   expanded, day by day, in its own `timezone`.
+2. **Minus `exdates`.** A date in a schedule's `exdates` removes that
+   schedule's hours on that date.
+3. **Minus blocked time.** Every `ACTIVE` blocked time is expanded the same way
+   and subtracted, whatever schedule it overlaps.
+4. **Minus bookings.** Every booking of the supplier that isn't `CANCELLED`
+   occupies its time.
+5. **Minus active holds.** A [hold](/resources/holds) occupies time exactly
+   like a booking until it lapses or converts.
+
+Busy events from a connected Google Calendar are subtracted too. Travel time
+and buffers around bookings are applied on top. `INACTIVE` and deleted rows are
+ignored. None of these steps is cached, so a change to hours or blocked time
+shows in the next availability search.
+
+## How `rrule` works here
+
+Every schedule and blocked time carries a weekly rule, such as
+`FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,WE`. It isn't a full RFC 5545 engine. The
+rule must be `FREQ=WEEKLY` with no `DTSTART`, and only three parts are read:
+
+| Part | What it does here |
+| --- | --- |
+| `INTERVAL` | Every *n*th week. Weeks are counted from the Monday of the week that contains `startDate`. `INTERVAL=2` with a `startDate` of Wednesday 2026-11-04 works the week of Monday 2026-11-02, skips the next, and so on. |
+| `BYDAY` | The weekdays the rule allows. Leave it out to allow every day. |
+| `UNTIL` | A last date. The row stops at `UNTIL` or `endDate`, whichever comes first. Prefer `endDate`, so the row's last day lives in one field. |
+
+**Other parts are accepted and ignored.** `COUNT` isn't read. An ordinal in
+`BYDAY` is dropped: `BYDAY=1SA` saves without an error and is offered every
+Saturday.
+
+The row's own fields carry the rest. `startDate` and `endDate` bound it, as
+`YYYY-MM-DD` dates in its `timezone`. Each range in `weeklyTimeRanges` names
+its own `dayOfWeek` and `HH:MM` times.
+
+**`BYDAY` filters the ranges.** A range whose `dayOfWeek` isn't in `BYDAY` is
+never offered, and nothing warns you. Keep the two in step: when you add a
+Friday range, add `FR` to `BYDAY`.
+
+**Times are wall-clock times.** `09:00` is 09:00 in the row's `timezone` on
+every date, on either side of a daylight-saving change. A range with
+`crossesMidnight: true` ends on the next day, and belongs to the day it starts.
+
+Any other `FREQ`, or a rule with `DTSTART`, is refused before anything is
+saved:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "rrule: rrule must be FREQ=WEEKLY without DTSTART (e.g. FREQ=WEEKLY;INTERVAL=1;BYDAY=MO)",
+  "statusCode": 400,
+  "requestId": "6c1e8a3f-2b7d-4f95-a0c4-9e3d5b7f1a28"
+}
+```
+
+A monthly pattern, such as "the first Saturday", has no rule here. Model it as
+a weekly rule plus `exdates` for the Saturdays they don't work, or as a
+schedule per date range.
+
+## Exceptions: `exdates` or blocked time
+
+Two tools take time out of a schedule. They do different jobs:
+
+| | `exdates` on a schedule | A blocked time |
+| --- | --- | --- |
+| Removes | That schedule's hours, for whole dates | Any time, a whole day or part of one |
+| Applies to | One schedule | Every schedule of the supplier |
+| Lives | Inside the schedule, as a list | As its own row, with `notes`, which you list, change and delete |
+| Use it for | A date this pattern never runs, such as a public holiday the business closes | Time off: a vacation, a dentist visit, a lunch break |
+
+A rule of thumb: if the reason is the **pattern** ("we don't run Tuesday
+lessons on Christmas Eve"), use `exdates`. If the reason is the **supplier**
+("I'm away"), use blocked time. A supplier with three schedules blocks a
+vacation once, not three times.
+
+### Skip a date with `exdates`
+
+`exdates` is replaced whole on `PATCH`. Read the schedule, add the date to the
+list you got back, and send the full list with the row's `version`:
+
+```json
+// PATCH /v1/projects/{projectId}/suppliers/me/schedules/sch_01kv60qh3m7r2p9t4w6x8y0zab
+{
+  "exdates": ["2026-12-24", "2026-12-25", "2027-01-01"],
+  "version": 4
+}
+```
+
+An exdate removes the hours that **start** on that date. For a range with
+`crossesMidnight: true`, the whole shift goes, including the part after
+midnight. An overnight shift that starts the evening before the exdate still
+runs into it.
+
+### Block time off
+
+A week of vacation, every day blocked in full:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/blocked-times
+{
+  "startDate": "2026-12-21",
+  "endDate": "2026-12-27",
+  "rrule": "FREQ=WEEKLY;INTERVAL=1",
+  "allDay": true,
+  "notes": "Vacation"
+}
+```
+
+The `201` returns the row in `data`, with its `blockedTimeId` (a `blk_` id)
+and `version: 1`. `allDay: true` blocks from local midnight to the next local
+midnight, so a daylight-saving day is blocked in full.
+
+Part of one afternoon:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/blocked-times
+{
+  "startDate": "2026-11-18",
+  "endDate": "2026-11-18",
+  "rrule": "FREQ=WEEKLY;INTERVAL=1",
+  "allDay": false,
+  "timeRanges": [
+    { "startTime": "14:00", "endTime": "16:30", "crossesMidnight": false, "sortOrder": 0 }
+  ],
+  "notes": "Dentist"
+}
+```
+
+A range in `timeRanges` with no `dayOfWeek` applies on every day the rule
+allows. Give it a `dayOfWeek` to block, say, Monday mornings only.
+
+Each shape refuses the other's fields. `allDay: true` with ranges is a `400`:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "timeRanges: timeRanges must be empty when allDay is true",
+  "statusCode": 400,
+  "requestId": "3b9f2d6a-7e1c-4a58-9d03-5c8e1f4a7b62"
+}
+```
+
+`allDay: false` with no ranges is `timeRanges must contain at least one range
+when allDay is false`.
+
+<Warning>
+**Blocking time doesn't touch bookings already in it.** A blocked time, an
+exdate or a shorter schedule stops new bookings. A booking that already sits
+in that time stays booked, and the client still expects the supplier. Before
+you save time off, list the supplier's bookings in that range with
+`GET /suppliers/me/bookings?startDate=…&endDate=…`, and move or cancel them. See
+[Cancel and reschedule](/guides/build-a-supplier-portal#cancel-and-reschedule).
+</Warning>
+
+To end a block early, `PATCH` its `endDate`. To remove it, `DELETE` it (`204`).
+A stale `version` on a blocked time is `409 VERSION_CONFLICT` with
+`"Blocked time was modified by another writer"`.
+
+## Seasons
+
+A season is a schedule with a date range. A supplier who works longer days in
+summer has two schedules: one for the school year and one for summer, with
+dates that don't overlap. Both are `ACTIVE` all year. Each offers hours only
+between its own `startDate` and `endDate`.
+
+<Steps>
+<Step title="End the current season on its last day">
+`PATCH` the current schedule's `endDate` to the day before the new season
+starts, for example `"endDate": "2027-06-27"`, with its `version`. Leave it
+`ACTIVE`: after its `endDate` it offers nothing. Do this first. While the two
+date ranges overlap, the new season can't be switched on.
+</Step>
+
+<Step title="Clone it">
+`POST /schedules/{scheduleId}/clone` takes no body. It copies the schedule's
+hours, offerings, venues and zone into a new row, with a new `sch_` id and
+`status: "INACTIVE"`:
+
+```
+POST /v1/projects/{projectId}/suppliers/me/schedules/sch_01kv60qh3m7r2p9t4w6x8y0zab/clone
+```
+
+The `201` returns the clone, at `version: 1`. An `INACTIVE` schedule offers
+nothing, so the supplier can edit it without clients seeing half-made hours.
+</Step>
+
+<Step title="Edit the clone and activate it">
+Change its dates and hours, and switch it on, in one `PATCH`:
+
+```json
+// PATCH /v1/projects/{projectId}/suppliers/me/schedules/sch_01kv60qhp2x7c4n9r3t5w8y6za
+{
+  "startDate": "2027-06-28",
+  "endDate": "2027-08-27",
+  "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR",
+  "weeklyTimeRanges": [
+    { "dayOfWeek": "MO", "startTime": "08:00", "endTime": "18:00", "crossesMidnight": false, "sortOrder": 0 },
+    { "dayOfWeek": "TU", "startTime": "08:00", "endTime": "18:00", "crossesMidnight": false, "sortOrder": 0 },
+    { "dayOfWeek": "WE", "startTime": "08:00", "endTime": "18:00", "crossesMidnight": false, "sortOrder": 0 },
+    { "dayOfWeek": "TH", "startTime": "08:00", "endTime": "18:00", "crossesMidnight": false, "sortOrder": 0 },
+    { "dayOfWeek": "FR", "startTime": "08:00", "endTime": "14:00", "crossesMidnight": false, "sortOrder": 0 }
+  ],
+  "status": "ACTIVE",
+  "version": 1
+}
+```
+
+Send the dates and `status` together. A clone has the same dates and hours
+as the schedule it came from. Activating it before you change them overlaps
+the original, and is refused with `409 CONFLICT`.
+</Step>
+</Steps>
+
+**Don't delete a season you cloned from.** A clone names the same travel zone
+as its original. Deleting a schedule whose `travelZoneRef` names one of the
+supplier's own zones soft-deletes that zone too. The other season then names a
+deleted zone, and quietly stops covering clients' addresses. Its venues still
+work. To retire a season, let its `endDate`
+pass, or set its `status` to `INACTIVE`. See
+[Remove a zone, or stop working in it](/guides/set-up-a-mobile-supplier-service-area#remove-a-zone-or-stop-working-in-it).
+
+### When a save is refused with `409`
+
+Schedule writes have two `409`s with different fixes. **Branch on `code`, not
+the status:**
+
+| `code` | `message` | What to do |
+| --- | --- | --- |
+| `CONFLICT` | `Schedule overlaps an existing active schedule (sch_…)` | Two `ACTIVE` schedules may not overlap in time, whichever venue or zone each names. Change the dates or hours, or make the other one `INACTIVE`. Retrying the same request fails again. |
+| `VERSION_CONFLICT` | `Schedule was modified by another writer` | The row changed since you read it. Re-read it, re-apply the supplier's change, and send the new `version`. |
+
+The overlap answer names the schedule it collides with:
+
+```json
+{
+  "code": "CONFLICT",
+  "message": "Schedule overlaps an existing active schedule (sch_01kv60qh3m7r2p9t4w6x8y0zab)",
+  "statusCode": 409,
+  "requestId": "8d4a1f7c-5e2b-4c96-b3a0-1f7e9c2d5a84"
+}
+```
+
+This example adds a date to `exdates`. It builds the change from the row it
+just read, so a retry merges with whatever the other writer saved:
+
+```js
+async function addExdate(scheduleId, date, attempt = 1) {
+  const { data: row } = await api.get(`/suppliers/me/schedules/${scheduleId}`);
+  const res = await api.patch(`/suppliers/me/schedules/${scheduleId}`, {
+    exdates: [...new Set([...row.exdates, date])],
+    version: row.version,
+  });
+  if (res.status !== 409) return res;
+
+  const err = await res.json();
+  if (err.code === 'VERSION_CONFLICT' && attempt === 1) {
+    // Someone else saved first. Re-read, rebuild the change, try once more.
+    return addExdate(scheduleId, date, attempt + 1);
+  }
+  if (err.code === 'CONFLICT') {
+    // An overlap. Show the supplier which schedule it collides with.
+    throw new OverlapError(err.message);
+  }
+  throw new SaveError(err.message);
+}
+```
+
+Don't resend a stale form unchanged with a fresh `version`. That overwrites
+the other writer's change, which is what `version` exists to prevent.
+
+A few things about the overlap check:
+
+- **Only `ACTIVE` schedules are checked.** Saving an `INACTIVE` row never
+  conflicts. The check runs when it becomes `ACTIVE`.
+- **Only real hours collide.** Two seasons that meet, one ending on
+  2027-06-27 and the next starting on 2027-06-28, don't. A range that ends at
+  12:00 and one that starts at 12:00 don't either.
+- **It looks from today to a year ahead.** Hours in the past never conflict.
+  An overlap more than 365 days out isn't caught when you save. Create a
+  season less than a year before it starts, or check the dates yourself.
+
+Blocked time is never checked for overlap. It may overlap anything, which is
+the point.
+
+## When the supplier's timezone moves
+
+A schedule and a blocked time copy their `timezone` once, when they are
+created: the `timezone` you send, else the supplier's profile zone, else the
+project's default. After that, the row keeps its zone. So when a supplier
+changes `timezone` on their profile with `PATCH /suppliers/me`, their existing
+hours don't move. Rows created later take the new zone, and the supplier ends
+up with hours in two zones.
+
+To bring every row into the profile zone, call:
+
+```
+POST /v1/projects/{projectId}/suppliers/me/availability-timezone/apply-profile
+```
+
+```json
+{
+  "data": {
+    "timezone": "America/Vancouver",
+    "schedules": 3,
+    "blockedTimes": 2
+  }
+}
+```
+
+- It keeps **wall-clock times**. 09:00–17:00 in Toronto becomes 09:00–17:00 in
+  Vancouver.
+- It moves `INACTIVE` rows too, so a season you switch on later is already in
+  the right zone. Deleted rows stay as they were.
+- The counts are the rows it rewrote. A row already in the zone isn't
+  counted.
+- **Each rewritten row gets a new `version`.** Re-read a schedule before you
+  next `PATCH` it.
+- A row someone edits at the same moment is skipped, and not counted. Call it
+  again: it's safe to repeat, and moves only what's left.
+- It doesn't re-run the overlap check.
+- You can't choose the zone. When the profile has none, it uses the project's
+  default. When neither has one, it changes nothing:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "A timezone is required: neither the supplier nor the project has one to move the rows to",
+  "statusCode": 400,
+  "requestId": "2e7c5a9d-1f3b-4d68-8a04-6b9e2c7f3d15"
+}
+```
+
+**Bookings don't move.** A booking is a fixed instant with its own
+`bookingTz`. A booking at 10:00 Toronto time stays at that instant, which is
+07:00 in Vancouver, and may now sit outside the supplier's hours. After a move,
+list the supplier's upcoming bookings and reschedule any that no longer fit.
+
+**A season somewhere else** doesn't need a profile change. Send `timezone` on
+that season's schedule, for example `"America/Vancouver"` for a winter spent
+on the west coast, and leave the profile as it is. Each row expands in its own
+zone.
+
+## Check the result
+
+Open times are what clients are offered, so check them, not just the rows.
+`POST /v1/projects/{projectId}/availability/suppliers` takes the API key
+alone, so your server can run it after the supplier saves:
+
+```json
+// POST /v1/projects/{projectId}/availability/suppliers
+{
+  "serviceId": "srv_01kv60qg12e82acr78edfnjhvv",
+  "offeringId": "off_01kv60qge5eh59ap0gw0pqrrys",
+  "locationId": "loc_01kv60qg4h2n7r9t3w5x8y6zab",
+  "lookAheadStartDate": "2026-12-21T00:00:00-05:00",
+  "lookAheadDays": 14,
+  "timezone": "America/Toronto"
+}
+```
+
+For a mobile supplier, send the client's `lat` and `lng` instead of
+`locationId`.
+
+Each entry in `data` holds a `supplier` and their open `days`. Find the
+supplier by `supplier.supplierId`, following `nextCursor` if they're not on
+the first page. Trimmed:
+
+```json
+{
+  "data": [
+    {
+      "supplier": { "supplierId": "sup_01kv60qg8c3m5p7r9t2w4x6yza" },
+      "days": [
+        {
+          "date": "2026-12-28",
+          "slots": [
+            {
+              "startUtc": "2026-12-28T14:00:00.000Z",
+              "startLocal": "2026-12-28T09:00:00-05:00",
+              "endUtc": "2026-12-28T15:00:00.000Z",
+              "endLocal": "2026-12-28T10:00:00-05:00"
+            }
+          ]
+        }
+      ],
+      "position": 0
+    }
+  ],
+  "searchId": "3a8f1c6e-2d4b-4e97-b5a0-7c9e1f3d6b28",
+  "timezone": "America/Toronto",
+  "nextCursor": null,
+  "errors": []
+}
+```
+
+Read it against what you expect:
+
+- **No 2026-12-21 to 2026-12-27 in `days`.** The vacation blocked time
+  worked. A supplier with no open time on a date has no entry for it.
+- **`days: []`.** The supplier matches the service and place, but has no open
+  time in the window. Check the schedule's dates, `BYDAY`, `status`, and that
+  the offering is in its `serviceOfferingIds`.
+- **The supplier isn't in `data` at all.** The supplier doesn't serve this
+  offering at this place, or search hasn't caught up with a schedule saved a
+  moment ago. Which suppliers are returned comes from a search index that
+  MarketBox updates shortly after a schedule is saved. Their open times are
+  worked out live. Allow a short delay before you decide a new schedule
+  failed.
+
+See [Availability](/resources/availability#suppliers-grouped-by-supplier) for
+the full request and response.
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | Auth | Description |
+| --- | --- | --- | --- |
+| `/v1/projects/{projectId}/suppliers/me/schedules` | `GET`, `POST` | `x-api-key` + supplier `Bearer` | List (`includeInactive`, `includeDeleted`) and create working hours. |
+| `/v1/projects/{projectId}/suppliers/me/schedules/{scheduleId}` | `GET`, `PATCH`, `DELETE` | `x-api-key` + supplier `Bearer` | Read, change (send `version`), delete. |
+| `/v1/projects/{projectId}/suppliers/me/schedules/{scheduleId}/clone` | `POST` | `x-api-key` + supplier `Bearer` | An `INACTIVE` copy. |
+| `/v1/projects/{projectId}/suppliers/me/blocked-times` | `GET`, `POST` | `x-api-key` + supplier `Bearer` | List (`includeInactive`, `includeDeleted`) and create blocked time. |
+| `/v1/projects/{projectId}/suppliers/me/blocked-times/{blockedTimeId}` | `GET`, `PATCH`, `DELETE` | `x-api-key` + supplier `Bearer` | Read, change (send `version`), delete. |
+| `/v1/projects/{projectId}/suppliers/me/availability-timezone/apply-profile` | `POST` | `x-api-key` + supplier `Bearer` | Move every schedule and blocked time into the profile zone. |
+| `/v1/projects/{projectId}/suppliers/me/bookings` | `GET` | `x-api-key` + supplier `Bearer` | The supplier's bookings in a window, to check before time off. |
+| `/v1/projects/{projectId}/availability/suppliers` | `POST` | `x-api-key` | The supplier's open times, as clients see them. |
+
+### Errors and edge cases
+
+A `VALIDATION_ERROR` message starts with the field's path, such as
+`weeklyTimeRanges.0.crossesMidnight: `. The messages below are what follows
+it.
+
+| Scenario | `code` | Status | Resolution |
+| --- | --- | --- | --- |
+| A rule other than `FREQ=WEEKLY`, or one with `DTSTART` | `VALIDATION_ERROR` | `400` | Send a weekly rule. Put the dates in `startDate` and `endDate`. |
+| `endDate` before `startDate` | `VALIDATION_ERROR` | `400` | `endDate: endDate must be on or after startDate`. |
+| `crossesMidnight` that doesn't match the times | `VALIDATION_ERROR` | `400` | `crossesMidnight must be true when startTime > endTime, false otherwise`. |
+| A blocked time with `allDay: true` and ranges, or `allDay: false` and none | `VALIDATION_ERROR` | `400` | Send exactly one of the two shapes. |
+| No timezone on the row, the profile or the project | `BAD_REQUEST` | `400` | Set the supplier's profile `timezone`, or send `timezone`. |
+| Two `ACTIVE` schedules whose hours overlap | `CONFLICT` | `409` | Change the dates or hours, or make one `INACTIVE`. Don't retry unchanged. |
+| A stale `version` on a schedule, often after `apply-profile` or a zone's shape changed | `VERSION_CONFLICT` | `409` | `Schedule was modified by another writer`. Re-read and retry. |
+| A stale `version` on a blocked time | `VERSION_CONFLICT` | `409` | `Blocked time was modified by another writer`. Re-read and retry. |
+| A schedule or blocked time that isn't the supplier's, or doesn't exist | `NOT_FOUND` | `404` | `Schedule not found` or `Blocked time not found`. The two cases are identical. |
+| `apply-profile` with no profile or project zone | `BAD_REQUEST` | `400` | Set the supplier's profile `timezone` first. |
+| A range offered on no day | — | — | Its `dayOfWeek` isn't in `BYDAY`. Add the day to the rule. |
+| Time off saved, but a booking still sits in it | — | — | Blocked time doesn't move bookings. Reschedule or cancel them. |
+| The other season stopped covering client addresses after a delete | — | — | Deleting a schedule deleted the travel zone both seasons shared. Create a new zone and point the season at it. |
+
+See [Errors](/concepts/errors) for the envelope,
+[Concurrency](/concepts/concurrency#optimistic-versioning-on-updates) for
+`version`, and [Timezones](/concepts/timezones) for zones.

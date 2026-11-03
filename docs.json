@@ -61,6 +61,8 @@
               "guides/manage-a-client-account",
               "guides/accept-payments-with-stripe",
               "guides/build-a-supplier-portal",
+              "guides/supplier-day-view-and-reporting",
+              "guides/weekly-hours-exceptions-and-seasons",
               "guides/set-up-a-mobile-supplier-service-area",
               "guides/report-site-events"
             ]
