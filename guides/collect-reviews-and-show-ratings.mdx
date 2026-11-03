@@ -1,0 +1,497 @@
+---
+title: Collect reviews and show ratings
+description: Let clients rate suppliers and suppliers rate clients after a booking, handle the duplicate and cancelled-booking errors, and show a supplier's star rating on a profile page, from your server with an API key.
+---
+
+This guide covers both halves of ratings:
+
+- **Collect a review** of one booking, from the client or from the supplier.
+- **Show a rating**: a star badge, a supplier profile, and the full list of
+  a supplier's reviews.
+
+Every call here uses the API key, so it runs on your server. There is no
+client-plane or supplier-plane route for reviews. Your server decides who may
+rate which booking, and the API doesn't check it for you.
+
+For the fields and the attendance report, see
+[Reviews and reports](/resources/reviews).
+
+## Choose the direction
+
+A review is one side of a booking rating the other. `direction` says which
+side:
+
+| `direction` | Who writes it | Who is rated | `subjectType` |
+| --- | --- | --- | --- |
+| `CLIENT_TO_SUPPLIER` | The client | The supplier | `SUPPLIER` |
+| `SUPPLIER_TO_CLIENT` | The supplier | The client | `CLIENT` |
+
+The two directions are independent. One booking can hold one review in each.
+A review moves only the rated party's average.
+
+If your page is the target of MarketBox's rating emails, the link tells you
+which side clicked. `role=client` means post `CLIENT_TO_SUPPLIER`.
+`role=supplier` means post `SUPPLIER_TO_CLIENT`. See
+[What MarketBox puts in the link](/resources/reviews#what-marketbox-puts-in-the-link).
+
+<Warning>
+**The link proves nothing about who clicked.** A link to your own review page
+carries `bookingId`, `role` and, on a star link, `rating`. It carries no
+token. Anyone can edit any of them. Sign the visitor in, then check they're on
+the booking, before you show the form. Use `rating` only to pre-select the
+stars.
+</Warning>
+
+## Check the reviewer is on the booking
+
+The review route takes the booking from the path and both parties from the
+booking. It can't tell who is calling, because your API key acts for the
+business. So check ownership yourself, before you post.
+
+**For a client**, resolve their `clientId` from their token with
+`POST /clients/me`. Read the booking, and refuse when its `clientId` differs.
+Only the booking's own client can review it. Another participant on a group
+booking can't, because the review is always attributed to the booking's
+`clientId`. Refuse a booking that hasn't ended yet, too (see
+[Decide when to offer the form](#decide-when-to-offer-the-form)):
+
+```ts
+// app/api/bff/me/bookings/[bookingId]/review/route.ts
+import { NextResponse } from 'next/server';
+import { signedInClientId } from '@/lib/client'; // see Create a single booking
+
+export async function POST(
+  request: Request,
+  ctx: { params: Promise<{ bookingId: string }> },
+) {
+  const clientId = await signedInClientId(request); // from the token, never the browser
+  const { bookingId } = await ctx.params;
+  const { ratingStars, reviewText } = await request.json();
+
+  const booking = await fetch(
+    `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/bookings/${bookingId}`,
+    { headers: { 'x-api-key': process.env.MARKETBOX_API_KEY! } }, // server-only
+  ).then((res) => (res.ok ? res.json() : null));
+
+  // Same answer for "not yours" and "doesn't exist", so ids can't be probed.
+  if (booking?.data?.clientId !== clientId) {
+    return NextResponse.json({ message: 'Booking not found' }, { status: 404 });
+  }
+  // The API accepts a review of a future booking, so this check is yours.
+  if (new Date(booking.data.bookingEndUtc) > new Date()) {
+    return NextResponse.json({ message: 'This booking has not ended yet' }, { status: 422 });
+  }
+
+  const res = await fetch(
+    `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/bookings/${bookingId}/reviews`,
+    {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.MARKETBOX_API_KEY!,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        direction: 'CLIENT_TO_SUPPLIER', // fixed by your route, never by the browser
+        ratingStars,
+        reviewText,
+      }),
+    },
+  );
+  return NextResponse.json(await res.json(), { status: res.status });
+}
+```
+
+`signedInClientId` is the helper from
+[Create a single booking](/guides/create-a-single-booking). It calls
+`POST /clients/me` with the client's token and returns `data.clientId`.
+
+**For a supplier**, ask the supplier plane. Call
+`GET /suppliers/me/bookings/{bookingId}` with the API key and the supplier's
+access token. It returns the booking only to its current supplier. Any other
+booking is a `404`, so a `200` is your ownership check. Check its
+`bookingEndUtc` the same way. Then post `SUPPLIER_TO_CLIENT` with the API key.
+See
+[Credentials and the token](/guides/build-a-supplier-portal#credentials-and-the-token).
+
+## Decide when to offer the form
+
+The API accepts a review of any booking that isn't `CANCELLED`. **The booking
+doesn't have to be `COMPLETED`.** Nothing in MarketBox moves a booking to
+`COMPLETED` automatically, so most ended bookings never reach it.
+
+That means the API also accepts a review of a booking that hasn't happened
+yet. Gate the form yourself:
+
+- **Offer it once the booking has ended.** Compare `bookingEndUtc` with now.
+  MarketBox sends its own rating email an hour after the end. See
+  [Emails](/concepts/emails#after-it-happens).
+- **Don't wait for a status.** A booking stays `AWAITING_CONFIRMATION` until
+  the supplier files an attendance report, which may be never.
+- **Decide about no-shows and disputes.** A `CLIENT_NO_SHOW`,
+  `SUPPLIER_NO_SHOW` or `DISPUTED` booking is still reviewable. MarketBox
+  sends no rating emails for a no-show booking. Whether your page offers the
+  form for one is your business's call.
+
+Attendance is a separate call, and a review says nothing about who attended.
+A client report of "didn't attend", filed with your key before the supplier
+reports, turns the supplier's later "attended" into `DISPUTED`. A report filed
+with your key doesn't dispute a booking that is already `COMPLETED`. See
+[Attendance and disputes](/resources/bookings#attendance-and-disputes).
+
+### Show names before the first review
+
+A form reads better with a name: "How was your booking with Jane?". Get both
+names from `GET /bookings/{bookingId}/aggregate`. Its `parties` object carries
+`parties.client.fullName` and `parties.supplier.fullName`. It's the only
+public way to turn a `clientId` into a name. `parties.supplier` is `null` when
+no supplier is assigned. Each `fullName` is best-effort and absent when the
+profile can't be resolved, so fall back to a neutral label.
+
+## Post the review
+
+```bash Leave a review
+curl -X POST "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/bookings/bk_01kv7q41n2hbqxwm03ymn7bxl9/reviews" \
+  -H "x-api-key: $MARKETBOX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "direction": "CLIENT_TO_SUPPLIER",
+    "ratingStars": 5,
+    "reviewText": "Turned up on time and explained everything clearly."
+  }'
+```
+
+The body carries **no ids**. You can't name the supplier or the client.
+MarketBox reads both off the booking, so a review can only ever be about the
+two parties who were on it.
+
+- `direction` is required.
+- `ratingStars` is a whole number from 1 to 5.
+- `reviewText` is optional, up to 5000 characters.
+
+```json 201 Created
+{
+  "data": {
+    "reviewId": "rev_01kx2c7m9d4tq8vz3h5n6bwjre",
+    "supplierId": "sup_01kv60qh1k5xylm7r0c1qj8zpa",
+    "clientId": "cli_01kx16ek2jf4r9da74adf6m4h0",
+    "projectId": "prj_01kv60qgnef2kt3pvqgwmkbzfr",
+    "ratingStars": 5,
+    "reviewText": "Turned up on time and explained everything clearly.",
+    "bookingId": "bk_01kv7q41n2hbqxwm03ymn7bxl9",
+    "direction": "CLIENT_TO_SUPPLIER",
+    "subjectType": "SUPPLIER",
+    "subjectId": "sup_01kv60qh1k5xylm7r0c1qj8zpa",
+    "createdAt": "2026-10-21T15:12:44.381Z",
+    "supplierName": "Jane Smith",
+    "clientName": "Cara Client"
+  }
+}
+```
+
+Read `subjectType` and `subjectId` to know who the review is about. Don't
+work it out from `direction` yourself. `supplierName` and `clientName` are
+best-effort, and absent when a profile can't be resolved. No email address is
+returned for either party.
+
+In the same write, MarketBox adds the rating to the rated party's average. It
+also stops that side's rating follow-up emails for this booking. The other
+side keeps getting its follow-ups, 3, 6 and 9 days after the end. See
+[Stopping the rating follow-ups](/concepts/emails#stopping-the-rating-follow-ups).
+
+**A review is permanent.** There is no update or delete route, and the average
+it moved stays moved. Show the stars and text back to the reviewer before you
+post.
+
+## When the post fails
+
+### The side has already reviewed the booking
+
+A second review in the same direction is refused. Nothing is written, and the
+average doesn't move:
+
+```json 409 Conflict
+{
+  "code": "REVIEW_ALREADY_EXISTS",
+  "message": "Booking bk_01kv7q41n2hbqxwm03ymn7bxl9 already has a client review",
+  "statusCode": 409,
+  "requestId": "6e1f3b8a-2c4d-4a9e-8b57-0d3c9f2a7e61"
+}
+```
+
+The `message` varies. It can also read `already has a CLIENT_TO_SUPPLIER
+review` or `already has a SUPPLIER_TO_CLIENT review`. Branch on `code`, never
+on `message`.
+
+Treat this `409` as "already answered", not as an error:
+
+- **Show what's on file.** Read `GET /bookings/{bookingId}/reviews`, and
+  render that side's review.
+- **Retry safely.** If a post timed out and you don't know whether it
+  landed, send it again. A `409` means the first one did.
+
+The check is part of the write, so two simultaneous submits can't both win.
+A review in the other direction is never blocked by this one.
+
+### The booking is cancelled
+
+```json 422 Unprocessable Entity
+{
+  "code": "UNPROCESSABLE_ENTITY",
+  "message": "A cancelled booking cannot be reviewed",
+  "statusCode": 422,
+  "requestId": "9a4c2e7f-1b3d-4f86-a5e0-7c2b8d1f3a94"
+}
+```
+
+Don't retry. This comes before the duplicate check, so a cancelled booking
+returns `422` even when it already has a review.
+
+### The booking has no supplier
+
+A booking with no supplier assigned has nobody to rate, in either direction:
+
+```json 422 Unprocessable Entity
+{
+  "code": "UNPROCESSABLE_ENTITY",
+  "message": "This booking has no supplier assigned, so there is no supplier to review",
+  "statusCode": 422,
+  "requestId": "3d8b5f1a-7e2c-4b90-9f64-2a1e6c8d4b73"
+}
+```
+
+For `SUPPLIER_TO_CLIENT`, the `message` ends `so there is no supplier to
+review from` instead. Once the business assigns a supplier, the same post
+succeeds.
+
+### Other failures
+
+| Status and `code` | What it means |
+| --- | --- |
+| `400 VALIDATION_ERROR` | The body failed validation. `message` starts with the field name, for example `ratingStars: ratingStars must be between 1 and 5` for `0`. The wording varies, so branch on `code`. |
+| `404 NOT_FOUND` | `Booking not found`. The id is unknown in this project, or the booking was deleted. |
+
+## Show existing reviews
+
+`GET /bookings/{bookingId}/reviews` returns every review on the booking, in
+both directions, newest first. It isn't paginated. Use it so a returning
+reviewer sees their own review rather than an empty form.
+
+**Don't assume at most two.** The older `POST /reviews` route doesn't check
+for duplicates, so a booking can hold several `CLIENT_TO_SUPPLIER` reviews.
+Filter the list by `direction`; don't index into it.
+
+<Note>
+A review you just posted can take a moment to appear in this list, and in
+every other review list. Render the `201` body for the reviewer, rather than
+re-reading straight away.
+</Note>
+
+## Show supplier ratings
+
+| You're building | Call | You get |
+| --- | --- | --- |
+| A star badge | `GET /suppliers/{supplierId}/review-summary` | `averageRating` and `reviewCount` |
+| A profile page | `GET /suppliers/{supplierId}` | The profile, with `rating` and the 5 newest reviews |
+| A full review list | `GET /reviews?supplierId={supplierId}` | Every review of the supplier, paginated |
+
+Every one of these counts **reviews of the supplier** only. A review the
+supplier wrote about a client never appears in them.
+
+### A star badge
+
+```bash Supplier rating summary
+curl "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/suppliers/sup_01kv60qh1k5xylm7r0c1qj8zpa/review-summary" \
+  -H "x-api-key: $MARKETBOX_API_KEY"
+```
+
+```json 200 OK
+{
+  "data": {
+    "supplierId": "sup_01kv60qh1k5xylm7r0c1qj8zpa",
+    "averageRating": 4.7,
+    "reviewCount": 128
+  }
+}
+```
+
+MarketBox updates the average in the same write as each review, so you never
+compute it. `averageRating` is rounded to one decimal place.
+
+**Check `reviewCount` before you render stars.** A supplier nobody has
+reviewed returns `averageRating: 0` and `reviewCount: 0`, not a `404`. Render
+"No reviews yet", not zero stars. A `404 NOT_FOUND`, `Supplier not found`,
+means the id is unknown in this project, or the supplier was deleted.
+
+`GET /suppliers` carries no rating. For a directory with a badge on each row,
+call the summary for each supplier on your server, and cache it. The average
+changes only when a review is written.
+
+### A supplier profile page
+
+`GET /suppliers/{supplierId}` returns the whole supplier, with a `rating`
+block:
+
+```json
+{
+  "data": {
+    "supplierId": "sup_01kv60qh1k5xylm7r0c1qj8zpa",
+    "firstName": "Jane",
+    "lastName": "Smith",
+    "email": "jane@example.com",
+    "phone": "+14165550142",
+    "rating": {
+      "averageRating": 4.7,
+      "reviewCount": 128,
+      "recent": [
+        {
+          "reviewId": "rev_01kx2c7m9d4tq8vz3h5n6bwjre",
+          "ratingStars": 5,
+          "reviewText": "Turned up on time and explained everything clearly.",
+          "clientName": "Cara Client",
+          "createdAt": "2026-10-21T15:12:44.381Z"
+        }
+      ]
+    }
+  }
+}
+```
+
+The example is trimmed. `recent` holds the 5 newest reviews, each a full
+review object. It's a preview, not the full set.
+
+<Warning>
+**The supplier detail carries contact fields.** It returns the supplier's
+`email`, `phone`, street address and coordinates, and `externalData`. Each
+review in `recent` carries the client's `clientId` and full name. Never pass
+the response to a browser. Copy only the fields your page renders.
+</Warning>
+
+Build the public profile on your server:
+
+```ts
+// lib/supplier-profile.ts — runs on your server only
+// `supplier` is `data` from GET /suppliers/{supplierId}: (await res.json()).data
+export function toPublicProfile(supplier: SupplierDetail) {
+  const { averageRating, reviewCount, recent } = supplier.rating;
+  return {
+    supplierId: supplier.supplierId,
+    name: `${supplier.firstName} ${supplier.lastName?.[0] ?? ''}`.trim(),
+    bio: supplier.bio,
+    avatarUrl: supplier.avatarUrl,
+    rating: reviewCount > 0 ? { averageRating, reviewCount } : null, // null → "No reviews yet"
+    recentReviews: recent.map((review) => ({
+      ratingStars: review.ratingStars,
+      reviewText: review.reviewText,
+      createdAt: review.createdAt,
+      reviewer: review.clientName?.split(' ')[0] ?? 'A client', // first name only
+    })),
+  };
+}
+```
+
+Showing reviewers by first name is a choice, not an API rule. Decide with the
+business what a public page shows. A review from the older `POST /reviews`
+route has no `clientId`, so it has no `clientName` either.
+
+The detail returns an **inactive** supplier, with `active: false`, so a paused
+supplier's profile still renders. See
+[Rating and reviews](/resources/suppliers#rating-and-reviews).
+
+### Every review of a supplier
+
+`GET /reviews?supplierId={supplierId}` pages through every review of the
+supplier, newest first:
+
+```bash List a supplier's reviews
+curl "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/reviews?supplierId=sup_01kv60qh1k5xylm7r0c1qj8zpa&limit=20" \
+  -H "x-api-key: $MARKETBOX_API_KEY"
+```
+
+- **Pass `cursor` for the next page.** `nextCursor: null` is the only end of
+  results. A cursor is valid only with the `supplierId` that produced it. See
+  [Pagination](/concepts/pagination).
+- **Rows carry ids only.** This list has no `supplierName` or `clientName`.
+  `recent` on the profile carries names for the 5 newest reviews. Past those,
+  `GET /bookings/{bookingId}/reviews` returns names for one review's booking.
+- **Don't average a page.** Use `averageRating` from the summary. Averaging
+  the first page gives a wrong number.
+- **An unknown `supplierId` isn't an error.** It returns an empty page, so an
+  empty list doesn't confirm the id was right.
+
+Leave out `supplierId` to list every review of every supplier in the project.
+
+## Show client ratings
+
+Suppliers rate clients too. Two routes read those reviews:
+
+- `GET /clients/{clientId}/review-summary` returns the client's
+  `averageRating` and `reviewCount`, with the same zero rule as a supplier.
+- `GET /clients/{clientId}/reviews` lists the reviews suppliers wrote about
+  the client, paginated. Unlike `GET /reviews`, its rows carry
+  `supplierName` and `clientName`.
+
+Both return `404 NOT_FOUND`, `Client not found`, for a client unknown in this
+project, or deleted. Who may see a client's rating is your business's decision. These
+routes don't check who is asking.
+
+## Avoid the older project-level route
+
+`POST /reviews` is the older, project-level route. It stays for existing
+integrations. Use `POST /bookings/{bookingId}/reviews` for anything new.
+
+| | `POST /bookings/{bookingId}/reviews` | `POST /reviews` |
+| --- | --- | --- |
+| Booking | Required, from the path, and must exist | Optional `bookingId`, stored as given and never checked |
+| Who is rated | The booking's supplier or client, per `direction` | Any `supplierId` in the project |
+| Who wrote it | The booking's client or supplier | Unknown. `reviewerId` is optional and stored as given, unchecked. |
+| Duplicates | One per booking per direction, else `409` | Never refused. Each post counts again. |
+| Direction | Either | Client to supplier only |
+| Names in the response | Yes | No |
+
+Every review from the older route still counts toward the supplier's average.
+A review sent there without a `bookingId` doesn't stop the rating follow-up
+emails, so the client keeps being asked.
+
+To move over, put the booking in the path. Send `direction:
+"CLIENT_TO_SUPPLIER"`, `ratingStars` and `reviewText`. Drop `supplierId`,
+`reviewerId` and `bookingId` from the body. If the older route already holds a
+review for that booking, the new one usually returns `409
+REVIEW_ALREADY_EXISTS`.
+
+## Reference
+
+### Endpoints used in this guide
+
+Every route takes the API key. Each path follows the project prefix, as in
+`/v1/projects/{projectId}/reviews`.
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `POST` | `/bookings/{bookingId}/reviews` | Leave a review, in either direction. |
+| `GET` | `/bookings/{bookingId}/reviews` | Every review on a booking. |
+| `GET` | `/bookings/{bookingId}/aggregate` | The booking, with both parties' names. |
+| `GET` | `/suppliers/{supplierId}/review-summary` | A supplier's average and count. |
+| `GET` | `/suppliers/{supplierId}` | A supplier's profile, with `rating`. |
+| `GET` | `/reviews` | Reviews of suppliers, optionally one supplier's. |
+| `GET` | `/clients/{clientId}/review-summary` | A client's average and count. |
+| `GET` | `/clients/{clientId}/reviews` | Reviews suppliers wrote about a client. |
+| `POST` | `/reviews` | Older create route. Don't use it for new work. |
+
+### Errors
+
+| Status and `code` | When | What to do |
+| --- | --- | --- |
+| `409 REVIEW_ALREADY_EXISTS` | That side has already reviewed the booking. | Show the review on file. Don't retry. |
+| `422 UNPROCESSABLE_ENTITY` | The booking is cancelled, or has no supplier. | Don't retry. Hide the form. |
+| `404 NOT_FOUND` | Unknown or deleted booking, supplier or client. | Check the id and the project. |
+| `400 VALIDATION_ERROR` | A missing `direction`, or stars outside 1–5. | Fix the body. |
+
+<Check>
+- Call MarketBox from your server. The API key never reaches a browser.
+- Sign the reviewer in, and check they're on the booking, before you post.
+- Offer the form after `bookingEndUtc`, not after `COMPLETED`.
+- Send `direction`, `ratingStars` and `reviewText` only. Ids come off the booking.
+- Treat `409 REVIEW_ALREADY_EXISTS` as "already answered".
+- Check `reviewCount` before you render stars.
+- Copy only the fields you render from the supplier detail.
+</Check>
