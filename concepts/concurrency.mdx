@@ -198,7 +198,7 @@ has booked returns `SLOT_HELD` / `SLOT_BOOKED`, not `VERSION_CONFLICT`.
 | `DELETE /v1/projects/{projectId}/bookings/{bookingId}` | Yes — booking version moved. |
 | `PATCH /v1/projects/{projectId}/orders/{orderId}` | Yes — order version moved. |
 | `POST /v1/projects/{projectId}/orders/{orderId}/status` | Yes — order version moved. |
-| `DELETE /v1/projects/{projectId}/orders/{orderId}` | Yes — order version moved. |
+| `DELETE /v1/projects/{projectId}/orders/{orderId}` | Yes — order version moved, or `ORDER_NOT_DELETABLE` when the order holds a booking or money. |
 | `POST /v1/projects/{projectId}/bookings/{bookingId}/participants` | Yes — `CONFLICT` (booking at capacity, or the client is already registered). |
 
 ## Capacity and duplicate conflicts

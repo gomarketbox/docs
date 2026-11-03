@@ -70,9 +70,26 @@ underneath you: re-read it and decide again.
 
 `DELETE /v1/projects/{projectId}/orders/{orderId}` is a **soft-delete** —
 the order is hidden from lists but its data is retained. Deleting an order
-that isn't already `CANCELLED` also sets its status to `CANCELLED`. Reserve
-delete for orders raised in error; cancel an order that was genuinely called
-off.
+that isn't already `CANCELLED` also sets its status to `CANCELLED`. Delete is
+for orders raised in error; cancel an order that was genuinely called off.
+
+**Delete refuses a real order.** An order is real once it holds a booking,
+booked or already delivered, or a `PENDING` or `SUCCEEDED` payment or refund.
+Deleting one is a `409`, and nothing changes:
+
+```json
+{
+  "code": "ORDER_NOT_DELETABLE",
+  "message": "Order ord_01kx16f2a0h8a2my9u3f4tv0sp has 2 booking(s) and 1 payment or refund record(s) against it, so it cannot be deleted. Cancel it instead (status CANCELLED).",
+  "statusCode": 409,
+  "requestId": "4c9e2a7b-1d3f-4b86-a0e5-7f2c8d1b6e93"
+}
+```
+
+Cancel it with `POST .../orders/{orderId}/status` instead. An abandoned
+checkout whose order books nothing and took no money can still be deleted. A
+booking that reaches the order between that check and the delete is
+cancelled with it, and no one is emailed about it.
 
 ## Anatomy
 

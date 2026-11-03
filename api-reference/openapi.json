@@ -18046,7 +18046,7 @@
       "delete": {
         "tags": ["Orders"],
         "summary": "Soft-delete an order",
-        "description": "Marks the order deleted and hides it from list endpoints. The record is retained rather than destroyed, so financial history stays auditable. This is not the same as cancelling: use `POST /status` with `CANCELLED` to record that a real order was called off, and reserve delete for orders raised in error. Returns 204 with no body.",
+        "description": "Marks the order deleted and hides it from list endpoints. The record is retained rather than destroyed, so financial history stays auditable. This is not the same as cancelling: use `POST /status` with `CANCELLED` to record that a real order was called off, and reserve delete for orders raised in error. Delete refuses a real order with 409 `ORDER_NOT_DELETABLE`: one holding a booking (booked or already delivered) or a pending or succeeded payment or refund. A deleted order is also cancelled, and any booking that reached it after that check is cancelled without notifying anyone. Returns 204 with no body.",
         "parameters": [
           {
             "schema": {
@@ -18108,7 +18108,7 @@
             }
           },
           "409": {
-            "description": "Version conflict",
+            "description": "VERSION_CONFLICT, or ORDER_NOT_DELETABLE: the order holds a booking or money, so cancel it instead",
             "content": {
               "application/json": {
                 "schema": {
@@ -19796,7 +19796,7 @@
                                 "type": "string",
                                 "minLength": 1,
                                 "description": "The offering this session books. Must be the order item's own offering.",
-                                "example": "offr_01kx16ej9af1c3s8t6y2w4n7hb"
+                                "example": "off_01kx16ej9af1c3s8t6y2w4n7hb"
                               }
                             },
                             "required": ["serviceId", "offeringId"]
@@ -19806,7 +19806,7 @@
                           "example": [
                             {
                               "serviceId": "srv_01kx16ej8wfp0b4v3x1q7m2d5c",
-                              "offeringId": "offr_01kx16ej9af1c3s8t6y2w4n7hb"
+                              "offeringId": "off_01kx16ej9af1c3s8t6y2w4n7hb"
                             }
                           ]
                         }
@@ -41075,7 +41075,7 @@
                                 "type": "string",
                                 "minLength": 1,
                                 "description": "The offering this session books. Must be the order item's own offering.",
-                                "example": "offr_01kx16ej9af1c3s8t6y2w4n7hb"
+                                "example": "off_01kx16ej9af1c3s8t6y2w4n7hb"
                               }
                             },
                             "required": ["serviceId", "offeringId"]
@@ -41085,7 +41085,7 @@
                           "example": [
                             {
                               "serviceId": "srv_01kx16ej8wfp0b4v3x1q7m2d5c",
-                              "offeringId": "offr_01kx16ej9af1c3s8t6y2w4n7hb"
+                              "offeringId": "off_01kx16ej9af1c3s8t6y2w4n7hb"
                             }
                           ]
                         }
