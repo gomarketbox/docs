@@ -1,0 +1,393 @@
+---
+title: Manage a client's account
+description: Let a signed-in client edit their profile and saved addresses, choose the default address that prices their orders, and see their booking and order history.
+---
+
+A client account page in your booking flow does three jobs:
+
+- shows and edits the client's name and phone;
+- manages their saved service addresses, and which one is the default;
+- lists their bookings and orders.
+
+The first two run on the **client plane**: your BFF sends your API key and the
+signed-in client's token, and MarketBox works out which client it is from the
+token. History is different. The routes that list a client's bookings and
+orders take a `clientId` in the path and need only the API key, so **your
+server must make sure the signed-in client only ever sees their own**.
+
+This guide assumes you have hosted sign-in and the
+[BFF pattern](/guides/booking-flow-auth#the-bff-pattern) working, and that you
+already call `POST /clients/me` after sign-in. See
+[Onboard the client](/guides/booking-flow-auth#onboard-the-client).
+
+## The client plane at a glance
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `POST` | `/clients/me` | Onboard the signed-in client, or return their profile. Idempotent. |
+| `PATCH` | `/clients/me` | Change `firstName`, `lastName` or `phone`. |
+| `POST` | `/clients/me/addresses` | Save an address. |
+| `PATCH` | `/clients/me/addresses/{addressId}` | Change a saved address. |
+| `DELETE` | `/clients/me/addresses/{addressId}` | Remove a saved address. |
+| `PUT` | `/clients/me/addresses/{addressId}/default` | Make a saved address the default. |
+
+Each path above is relative to the project: `POST /clients/me` is
+`POST /v1/projects/{projectId}/clients/me`. Every one takes both credentials: `x-api-key` from your server, and `Authorization: Bearer` with
+the client's access token. There is no `GET /clients/me`. Read the profile by
+calling `POST /clients/me` again: it's idempotent, writes nothing when you
+send no body, and returns `200` with the profile.
+
+Every route except `POST /clients/me` needs the client to be onboarded first.
+Before that, the person has no membership of the project, and each returns
+`403`:
+
+```json
+{
+  "code": "FORBIDDEN",
+  "message": "No active membership on this project",
+  "statusCode": 403,
+  "requestId": "6a1f3c8e-2b7d-4e95-a0c4-9d3e5b1f7a28"
+}
+```
+
+A `404 NOT_FOUND`, `No client profile for this project`, comes back only for
+someone who is a member of the project, such as staff, but has no client
+profile there.
+
+## Show the profile
+
+```ts
+// app/api/bff/me/route.ts
+import { NextResponse } from 'next/server';
+
+export async function GET(request: Request) {
+  const authorization = request.headers.get('authorization'); // the client's Bearer token
+  if (!authorization?.toLowerCase().startsWith('bearer ')) {
+    return NextResponse.json({ message: 'Missing bearer token' }, { status: 401 });
+  }
+
+  const res = await fetch(
+    `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/clients/me`,
+    {
+      method: 'POST', // idempotent: returns the existing profile with 200
+      headers: {
+        'x-api-key': process.env.MARKETBOX_API_KEY!, // server-only
+        authorization,
+      },
+    },
+  );
+
+  const body = await res.json().catch(() => ({}));
+  return NextResponse.json(body, { status: res.status });
+}
+```
+
+The profile, abridged to the fields an account page uses:
+
+```json
+{
+  "data": {
+    "clientId": "cli_01kx16f0a1c7b2sd91xzq3mn5p",
+    "firstName": "Emma",
+    "lastName": "Bishop",
+    "fullName": "Emma Bishop",
+    "email": "emma@example.com",
+    "phone": "+14165550134",
+    "defaultAddressId": "<addressId>",
+    "addresses": [
+      {
+        "id": "<addressId>",
+        "source": "MANUAL",
+        "addressOneLine": "100 Queen St W, Toronto, ON M5H 2N2, Canada",
+        "streetNumber": "100",
+        "streetName": "Queen St W",
+        "city": "Toronto",
+        "state": "ON",
+        "country": "CA",
+        "zipCode": "M5H 2N2",
+        "unitNumber": null,
+        "latitude": 43.6532,
+        "longitude": -79.3832
+      }
+    ],
+    "lastPayment": { "type": "CARD", "brand": "visa", "last4": "4242" }
+  }
+}
+```
+
+- `email` comes from the client's sign-in. No client-plane route changes it.
+- `lastPayment` is a display-only snapshot of the card they last paid with. See
+  [Show the card a client last paid with](/guides/accept-payments-with-stripe#show-the-card-a-client-last-paid-with).
+- `addresses[].source` is `MANUAL` for an address saved through the routes
+  below, and `BOOKING` for one MarketBox saved from an in-home booking.
+- `latitude` and `longitude` may be absent or `null`. An address typed by hand
+  may never have been geocoded. Treat a missing pair as unknown, not as a
+  location.
+
+## Edit the name and phone
+
+`PATCH /clients/me` changes `firstName`, `lastName` or `phone`. Send only the
+fields to change:
+
+```json
+{
+  "lastName": "Bishop-Nadeau",
+  "phone": "(416) 555-0199"
+}
+```
+
+- Names are trimmed and must be 1–80 characters. You can change a name but
+  not clear it, so a blank or `null` name is a `400`.
+- `phone: null` clears the phone. The phone is stored in E.164 form
+  (`+14165550199`). A North American number may be sent in national form;
+  any other must start with `+` and the country code.
+- A body with none of `firstName`, `lastName` or `phone` is a
+  `400 VALIDATION_ERROR`. Sending the values already stored is a `200` that
+  writes nothing.
+
+The response is the whole profile, as above. The change is also copied to the
+client's record in Stripe. If that copy fails, the profile is still updated
+and you still get `200`.
+
+Make the change **before** you create an order, so the order and booking
+emails carry the new name. Full rules:
+[Change the name or phone later](/guides/booking-flow-auth#change-the-name-or-phone-later).
+
+## Manage saved addresses
+
+### Save an address
+
+`POST /clients/me/addresses` takes one structured address. The fields are the
+same as a booking's `address`: see
+[The address object](/guides/booking-addresses#the-address-object).
+
+```json
+{
+  "addressOneLine": "100 Queen St W, Toronto, ON M5H 2N2, Canada",
+  "streetNumber": "100",
+  "streetName": "Queen St W",
+  "city": "Toronto",
+  "state": "ON",
+  "country": "CA",
+  "zipCode": "M5H 2N2"
+}
+```
+
+The `201` response carries the whole profile in `data`, and the address you
+just saved beside it in `address`:
+
+```json
+{
+  "data": { "clientId": "cli_01kx16f0a1c7b2sd91xzq3mn5p", "defaultAddressId": "<addressId>", "addresses": ["…"] },
+  "address": { "id": "<addressId>", "source": "MANUAL", "city": "Toronto", "country": "CA" }
+}
+```
+
+`country` is stored as an ISO 3166-1 alpha-2 code. You can send `"CA"`,
+`"CAN"` or `"Canada"`. Anything else is refused:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "country: country must be an ISO 3166-1 code or English name (e.g. \"CA\", \"CAN\", \"Canada\"); got \"Narnia\"",
+  "statusCode": 400,
+  "requestId": "2d8b4f1a-7c3e-4a69-b5d0-8e1f6c2a9b47"
+}
+```
+
+`state` is coerced to an ISO 3166-2 code when it can be, and kept as you typed
+it when it can't.
+
+### An address id is derived from the address
+
+An address id starts with `addr_` and is a hash of the structured fields:
+street number, street name, unit, city, state, country and zip code. It isn't
+a random id. Three things follow from that:
+
+- **Saving the same address twice is an upsert.** You get the same id back and
+  the client still has one record. `addressOneLine` isn't part of the hash, so
+  the same street address formatted differently is still one record.
+- **Editing an address can change its id.** If a `PATCH` changes any hashed
+  field, the record moves to a new id and the old id stops existing. If that
+  address was the default, the default moves with it. Edit only
+  `addressOneLine` and the id stays.
+- **An edit can merge two addresses.** Edit one address until it matches
+  another saved address, and they become one record.
+
+So **re-read every address id from the response** after a `PATCH`. Don't keep
+an `addressId` in your own database across edits. A stale id is a `404`:
+
+```json
+{
+  "code": "NOT_FOUND",
+  "message": "Address not found",
+  "statusCode": 404,
+  "requestId": "8f2c6a1d-4b9e-4d73-a5e0-1c7b3f9d2e64"
+}
+```
+
+An edit that changes the address id drops the stored coordinates, because they
+described the old address. An edit that merges into another saved address
+keeps that address's coordinates.
+
+### Change or remove an address
+
+`PATCH /clients/me/addresses/{addressId}` takes any subset of the address
+fields and merges them over the stored address. It returns the whole profile.
+
+`DELETE /clients/me/addresses/{addressId}` removes it for good: there is no
+soft delete. Bookings already made at that address keep their own copy, so
+they're unaffected. It returns the whole profile too.
+
+You can delete the default address. MarketBox then promotes the oldest
+remaining address to default, or clears `defaultAddressId` when none is left.
+Read `defaultAddressId` off the response rather than assuming which address
+won.
+
+## Choose the default address
+
+`PUT /clients/me/addresses/{addressId}/default` points `defaultAddressId` at an
+address the client has already saved. It takes no body and returns the whole
+profile. An id that isn't one of theirs is `404 Address not found`.
+
+The first address a client saves with `POST /clients/me/addresses` becomes
+their default. Later ones don't replace it, so set the default on purpose
+when the client picks one.
+
+<Warning>
+**The default address decides prices.** An order that names no
+`reservationId`, `locationId` or `address` prices against the region of the
+client's default address. Without a default, it uses one of their saved
+addresses, and which one isn't defined. Without any address, it uses the
+offering's `DEFAULT` price rule and that rule's currency.
+
+An address MarketBox saves from an in-home booking doesn't become the
+default. A client whose only addresses came from bookings has no default
+until you set one.
+
+So moving the default from Toronto to Seattle changes what the same client is
+quoted for the same offering, and in which currency. Orders already placed
+keep the region they were priced in.
+
+An order whose `currency` doesn't match what its region resolves to is
+refused. A checkout that names where the session happens never depends on
+the default: pass the hold's `reservationId` on `POST /orders`. See
+[Regional pricing](/concepts/regional-pricing#how-to-tell-an-order-which-region).
+</Warning>
+
+Use the client's saved addresses to pre-fill the in-home address step of your
+checkout. A saved address with `latitude` and `longitude` is ready to search
+with. One without them needs geocoding first, because travel zones match on
+coordinates, not postal codes.
+
+## Show booking and order history
+
+There is no client-plane route for history. Use the API-key routes, with the
+`clientId` your server resolved from the client's token:
+
+| Method | Path | Returns |
+| --- | --- | --- |
+| `GET` | `/clients/{clientId}/bookings` | The client's bookings, past and upcoming, by date. Filter with `startDate`, `endDate` (UTC) and `status`. |
+| `GET` | `/clients/{clientId}/orders` | The client's orders, newest first, in every status. |
+| `GET` | `/bookings/{bookingId}/aggregate` | One booking with its service lines, attendance reports and the names of both parties. |
+| `GET` | `/orders/{orderId}/aggregate` | One order with its items. |
+
+The two lists are paginated with `limit` and `cursor`. See
+[Pagination](/concepts/pagination). The two aggregates return one record.
+
+<Warning>
+**These routes don't know who is signed in.** They return whatever `clientId`,
+`bookingId` or `orderId` you ask for in the project. A BFF that takes the
+`clientId` from the browser, or that fetches a booking by an id from the URL
+without checking it, shows one client another client's bookings, names and
+addresses.
+
+Always resolve the `clientId` from the token with `POST /clients/me`. For a
+single booking or order, compare its `clientId` with that one, and answer
+`404` when they differ.
+</Warning>
+
+```ts
+// app/api/bff/me/bookings/[bookingId]/route.ts
+import { NextResponse } from 'next/server';
+import { signedInClientId } from '@/lib/client'; // see Create a single booking
+
+export async function GET(
+  request: Request,
+  ctx: { params: Promise<{ bookingId: string }> },
+) {
+  const clientId = await signedInClientId(request); // from the token, never the browser
+  const { bookingId } = await ctx.params;
+
+  const res = await fetch(
+    `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/bookings/${bookingId}/aggregate`,
+    { headers: { 'x-api-key': process.env.MARKETBOX_API_KEY! } }, // server-only
+  );
+  const body = await res.json().catch(() => ({}));
+
+  // Same answer for "not yours" and "doesn't exist", so ids can't be probed.
+  if (!res.ok || body.data?.booking?.clientId !== clientId) {
+    return NextResponse.json({ message: 'Booking not found' }, { status: 404 });
+  }
+  return NextResponse.json(body, { status: 200 });
+}
+```
+
+`signedInClientId` is the helper from
+[Create a single booking](/guides/create-a-single-booking). It
+calls `POST /clients/me` with the client's token and returns `data.clientId`.
+
+For the list, put the resolved `clientId` in the path yourself:
+
+```ts
+// app/api/bff/me/bookings/route.ts
+const clientId = await signedInClientId(request);
+const url = new URL(
+  `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/clients/${clientId}/bookings`,
+);
+url.searchParams.set('startDate', new Date().toISOString()); // upcoming only
+url.searchParams.set('limit', '20');
+```
+
+<Tip>
+For an "upcoming" tab, ask for `SCHEDULED` bookings from now on. For a "past"
+tab, ask for an `endDate` of now and show every status, including
+`AWAITING_CONFIRMATION`: that is a session that has ended and not been
+settled yet. See [The booking lifecycle](/resources/bookings#the-booking-lifecycle).
+</Tip>
+
+A client can't cancel or move a booking from the client plane. If your page
+offers that, your server does it with the API key, after the same ownership
+check. See [Cancel or reschedule a booking](/guides/cancel-or-reschedule-a-booking).
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | Auth | Description |
+| --- | --- | --- | --- |
+| `/v1/projects/{projectId}/clients/me` | `POST` | `x-api-key` + `Bearer` | Onboard, or read the profile. `201` the first time, `200` after. |
+| `/v1/projects/{projectId}/clients/me` | `PATCH` | `x-api-key` + `Bearer` | Change name or phone. |
+| `/v1/projects/{projectId}/clients/me/addresses` | `POST` | `x-api-key` + `Bearer` | Save an address. Upserts on the address content. |
+| `/v1/projects/{projectId}/clients/me/addresses/{addressId}` | `PATCH` | `x-api-key` + `Bearer` | Change an address. The id may change. |
+| `/v1/projects/{projectId}/clients/me/addresses/{addressId}` | `DELETE` | `x-api-key` + `Bearer` | Remove an address. Permanent. |
+| `/v1/projects/{projectId}/clients/me/addresses/{addressId}/default` | `PUT` | `x-api-key` + `Bearer` | Make an address the default. |
+| `/v1/projects/{projectId}/clients/{clientId}/bookings` | `GET` | `x-api-key` | The client's bookings. Your server checks ownership. |
+| `/v1/projects/{projectId}/clients/{clientId}/orders` | `GET` | `x-api-key` | The client's orders. Your server checks ownership. |
+| `/v1/projects/{projectId}/bookings/{bookingId}/aggregate` | `GET` | `x-api-key` | One booking in full. Check `booking.clientId`. |
+
+### Errors and edge cases
+
+| Scenario | `code` | Status | Resolution |
+| --- | --- | --- | --- |
+| The client hasn't been onboarded | `FORBIDDEN` | `403` | `No active membership on this project`. Call `POST /clients/me` first. |
+| A staff member or supplier signed in, with no client profile here | `NOT_FOUND` | `404` | `No client profile for this project`. Call `POST /clients/me` to make them a client too. |
+| The business removed the client's access | `MEMBERSHIP_INACTIVE` on `POST /clients/me`, `FORBIDDEN` elsewhere | `403` | The client asks the business to invite them again. |
+| The address id is unknown, or changed after an edit | `NOT_FOUND` | `404` | `Address not found`. Re-read ids from the latest profile. |
+| `country` isn't a country | `VALIDATION_ERROR` | `400` | Send an ISO 3166-1 code or an English country name. |
+| A `PATCH /clients/me` with none of the three fields, or a blank name | `VALIDATION_ERROR` | `400` | Send at least one of `firstName`, `lastName`, `phone`. Clear only `phone`, with `null`. |
+| An invalid phone number | `VALIDATION_ERROR` | `400` | Send E.164, or a North American number in national form. |
+| The order's `currency` doesn't match the region the default address resolves | `BAD_REQUEST` | `400` | Pass the hold's `reservationId`, a `locationId` or an `address` on `POST /orders`. See [Regional pricing](/concepts/regional-pricing). |
+| No user token, or an expired one | `HTTP_ERROR` | `401` | Sign the client in again. See [End-user authentication](/concepts/end-user-authentication). |
+
+See [Errors](/concepts/errors) for the envelope.

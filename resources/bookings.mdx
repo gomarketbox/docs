@@ -44,7 +44,7 @@ window has passed. See [Attendance and disputes](#attendance-and-disputes).
 | --- | --- | --- |
 | `SCHEDULED` | Created, not yet started. The only start state. | Booking creation. Nothing transitions *into* it. |
 | `STARTED` | The session is under way. | Your key, once `bookingStartUtc` has passed. The supplier plane has no route that sets it. |
-| `AWAITING_CONFIRMATION` | The session has ended and the booking is waiting to be settled. It stays here until the supplier reports attendance, or your key or an operator sets an outcome. | The platform, when `bookingEndUtc` passes. An operator can also reverse a settled booking back here within a window. |
+| `AWAITING_CONFIRMATION` | The session has ended and the booking is waiting to be settled. It stays here until the supplier reports attendance, or your key or an operator sets an outcome. | The platform, in an hourly sweep after `bookingEndUtc` passes, so up to about an hour later. See [Tracking state without webhooks](/concepts/tracking-state-without-webhooks#a-session-ends). An operator can also reverse a settled booking back here within a window. |
 | `DISPUTED` | The client reported that they didn't attend, and the booking was otherwise going to be (or had just been) `COMPLETED`. | The platform, when an attendance report is filed. See [Attendance and disputes](#attendance-and-disputes). Resolved by an operator in the MarketBox console. |
 | `COMPLETED` | Delivered. | The supplier's own report that they attended, or your key. Nothing completes a booking automatically. A client can still dispute it for 24 hours. |
 | `CLIENT_NO_SHOW` | The client did not attend. | Your key, after a grace period past the start. No attendance report sets it: a report says only whether its own side attended. |
@@ -153,6 +153,10 @@ cancelled:
 `creditTreatment` is only valid with `CANCELLED`. The status route never moves
 money: a forfeited session is not refunded, and a returned one is not charged
 again.
+
+For the whole flow, including reschedule, delete and the checks your server
+must make for a client, see
+[Cancel or reschedule a booking](/guides/cancel-or-reschedule-a-booking).
 
 The cancellation email to the client reports what happened to their session
 credit. It does not include your `cancellationReason` text, which stays on the

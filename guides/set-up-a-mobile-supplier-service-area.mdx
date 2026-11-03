@@ -1,0 +1,330 @@
+---
+title: Set up a mobile supplier's service area
+description: Give a supplier who travels to clients a travel zone and the hours they work in it, check a client's address is covered, and book them there.
+---
+
+A **mobile** supplier delivers at the client's address: a swim instructor at
+the client's pool, a trainer at their home. Search offers them to a client
+only when two things exist:
+
+1. **A travel zone**: the area they cover, as a circle or a drawn shape.
+2. **An `ACTIVE` schedule that names the zone**: the hours they work there,
+   and which offerings.
+
+A zone with no schedule makes no one bookable. A schedule with no zone covers
+only the venues it names.
+
+Both are written on the **supplier plane**, as the signed-in supplier, from
+your supplier portal or the MarketBox dashboard. An API key on its own can't
+create a zone or a schedule. See
+[Build a supplier portal](/guides/build-a-supplier-portal) for sign-in, the two
+credentials, and the full schedule rules. This guide is the setup in order,
+and how to check it worked.
+
+## The supplier's own zone or a project zone
+
+A schedule can name one of two kinds of zone:
+
+| Zone | Id | Who draws it | Where its id comes from |
+| --- | --- | --- | --- |
+| The supplier's own | `stz_…` | The supplier, with `POST /suppliers/me/travel-zones` | `GET /suppliers/me/travel-zones` |
+| A project zone, shared by several suppliers | `loc_…` | The business, in the MarketBox dashboard | `GET /locations?locationType=TRAVEL_ZONE`, with the API key alone |
+
+<Warning>
+**Only the supplier's own zone can be booked at a client's address.** Search
+offers a supplier whose schedule names a project zone. But a `TRAVEL_ZONE`
+booking or package booking takes the supplier's `stz_` id as its
+`locationId`. A `loc_` project zone there is refused:
+
+```json
+{
+  "code": "NOT_FOUND",
+  "message": "Booking location loc_01kv60qgnef2kt3pvqgwmkbzfr not found",
+  "statusCode": 404,
+  "requestId": "9a3d7f2c-1e5b-4c86-b0a4-6d2e8f1c3b75"
+}
+```
+
+**A hold accepts a `loc_` id, and fails later.** `POST /holds` returns `201`,
+and the same `404` comes at convert, after the client may already have paid.
+Check that the id starts with `stz_` before you hold.
+
+`POST /availability/package-slate` still returns a slate for that supplier,
+but booking from it fails with `409 LOCATION_UNRESOLVABLE`.
+
+Give every mobile supplier a zone of their own, even when it matches a
+project zone.
+</Warning>
+
+## Set it up
+
+<Steps>
+<Step title="Give the supplier a timezone">
+A schedule's hours are wall-clock times in its `timezone`. Leave `timezone` out
+of the schedule and it takes the supplier's profile `timezone`, then the
+project's default. When neither is set, the schedule is refused:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "A timezone is required: none was supplied, and neither the supplier nor the project has a default",
+  "statusCode": 400,
+  "requestId": "4e8b2a6d-9c1f-4d37-a5e0-2b7c9f3d1a68"
+}
+```
+
+Set it on the profile once with `PATCH /suppliers/me`, or send `timezone` on
+every schedule. See [Times](/guides/build-a-supplier-portal#times).
+</Step>
+
+<Step title="Create the travel zone">
+A `CIRCULAR` zone is a radius around a centre:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/travel-zones
+{
+  "name": "Downtown Toronto",
+  "latitude": 43.6532,
+  "longitude": -79.3832,
+  "travelZoneType": "CIRCULAR",
+  "travelDistance": 10,
+  "travelDistanceUnit": "KM"
+}
+```
+
+`travelDistanceUnit` is `KM` or `MILES`. Coverage is the straight-line
+distance from the centre, not driving time.
+
+A `DRAWN` zone is a GeoJSON `Polygon` or `MultiPolygon` in `travelRegions`.
+It still needs `latitude` and `longitude`, as its centre:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/travel-zones
+{
+  "name": "Midtown",
+  "latitude": 43.66,
+  "longitude": -79.375,
+  "travelZoneType": "DRAWN",
+  "travelRegions": {
+    "type": "Polygon",
+    "coordinates": [[[-79.42, 43.63], [-79.33, 43.63], [-79.33, 43.69], [-79.42, 43.69], [-79.42, 43.63]]]
+  }
+}
+```
+
+Each position is `[longitude, latitude]`, and each ring ends where it starts.
+**The API doesn't check the polygon's shape.** An unclosed ring or swapped
+coordinates is saved, and then covers the wrong place or nothing. Draw it
+with a map tool, and check it with a test address afterwards (Step 4).
+
+The `201` returns the zone in `data`, with `supplierTravelZoneId` (the `stz_`
+id) and `version: 1`.
+
+Each type requires its own fields and refuses the other's. A `CIRCULAR` zone
+without its distance is a `400`:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "travelDistance: travelDistance is required for CIRCULAR travel zones; travelDistanceUnit: travelDistanceUnit is required for CIRCULAR travel zones",
+  "statusCode": 400,
+  "requestId": "c1f7a3e9-5d2b-4b68-9e04-7a3c6f1d8b52"
+}
+```
+
+A `CIRCULAR` zone with `travelRegions` is `travelRegions must be null for
+CIRCULAR travel zones`. A `DRAWN` zone with a distance is `travelDistance must
+be null for DRAWN travel zones`, and one without a shape is `travelRegions is
+required for DRAWN travel zones`.
+</Step>
+
+<Step title="Create the schedule that uses it">
+Name the zone in `travelZoneRef`. This schedule covers Monday, Wednesday and
+Friday mornings, for one offering:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/schedules
+{
+  "startDate": "2026-11-09",
+  "endDate": "2027-06-30",
+  "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,WE,FR",
+  "weeklyTimeRanges": [
+    { "dayOfWeek": "MO", "startTime": "09:00", "endTime": "13:00", "crossesMidnight": false, "sortOrder": 0 },
+    { "dayOfWeek": "WE", "startTime": "09:00", "endTime": "13:00", "crossesMidnight": false, "sortOrder": 0 },
+    { "dayOfWeek": "FR", "startTime": "09:00", "endTime": "13:00", "crossesMidnight": false, "sortOrder": 0 }
+  ],
+  "appliesToAllOfferings": false,
+  "serviceOfferingIds": ["off_01kv60qge5eh59ap0gw0pqrrys"],
+  "travelZoneRef": {
+    "travelZoneSource": "SUPPLIER_TRAVEL_ZONE",
+    "supplierTravelZoneId": "stz_01kv60qgs4e4nbjhzradnqtj0h"
+  }
+}
+```
+
+- The schedule is `ACTIVE` unless you say otherwise.
+- `serviceOfferingIds` must be `ACTIVE` offerings of the supplier's own
+  services. Anything else is `400 BAD_REQUEST`, `Offerings not active for this
+  supplier: off_…`.
+- **Copy the zone id from the create response, or from
+  `GET /suppliers/me/travel-zones`.** A schedule that names only a zone, and no
+  venue, doesn't check that the zone exists. A typo saves without an error and
+  covers nothing.
+
+A schedule may name venues in `locationRefs` as well as a zone. For a client's
+address, only the schedule's own zone counts: clinic hours never become house
+calls.
+
+**An `ACTIVE` schedule may not overlap another `ACTIVE` schedule of the same
+supplier**, whichever venue or zone each one names. A supplier is in one
+place at a time. The second one is refused:
+
+```json
+{
+  "code": "CONFLICT",
+  "message": "Schedule overlaps an existing active schedule (sch_01kv60qh3m7r2p9t4w6x8y0zab)",
+  "statusCode": 409,
+  "requestId": "7b2e9c4f-3a1d-4e68-8f05-1c6a9d3e7b24"
+}
+```
+
+Only real hours collide. Two schedules on different days, or one that ends
+at 12:00 and one that starts at 12:00, don't. To cover two areas on the same
+morning, draw one zone that covers both, or split the hours between the
+schedules.
+</Step>
+
+<Step title="Check a client's address is covered">
+Each check below needs only the API key, so your server or an admin tool can
+run it.
+
+1. **The supplier's profile.** `GET /suppliers/{supplierId}` lists the zone in
+   `locations[]`, with `locationType: "TRAVEL_ZONE"` and the `stz_` id, and the
+   schedule in `availability.schedules[]` with `travelZone` set.
+2. **Coverage of one point.** `GET /suppliers?lat=43.6532&lng=-79.3832` lists
+   only suppliers whose zone contains that point. It's the exact radius or
+   polygon test, without availability.
+3. **Open times there.** `POST /availability/suppliers` with the service, the
+   offering and the same `lat` and `lng` returns the supplier with their open
+   slots in `days[]`.
+
+```json
+// POST /v1/projects/{projectId}/availability/suppliers
+{
+  "serviceId": "srv_01kv60qg12e82acr78edfnjhvv",
+  "offeringId": "off_01kv60qge5eh59ap0gw0pqrrys",
+  "lat": 43.6532,
+  "lng": -79.3832,
+  "lookAheadStartDate": "2026-11-09T00:00:00-05:00",
+  "lookAheadDays": 7,
+  "timezone": "America/Toronto"
+}
+```
+
+Search reads an index that MarketBox updates shortly after the schedule is
+saved, not in the same request. Allow a short delay before you decide the
+setup failed. Don't test with `servedRegions` on the profile: a background
+index maintains it, and its daily sweep can lag by up to a day.
+
+Search takes coordinates, not an address. Geocode the client's address
+first. See [Search suppliers by availability](/guides/search-suppliers-by-availability).
+</Step>
+
+<Step title="Book at the client's address">
+Book, or hold, with `locationType: "TRAVEL_ZONE"`, the supplier's `stz_` id as
+`locationId`, the client's `latitude` and `longitude`, and the structured
+`address`. Search slots carry times only, so take the `stz_` id from the
+supplier's `locations[]`. When the supplier has more than one zone, take the
+one that covers the client.
+
+See [Hold slots during checkout](/guides/hold-slots-for-checkout#a-travel-zone-checkout-end-to-end)
+for the full hold and convert, and
+[Client checkout, end to end](/guides/client-checkout-end-to-end) for the
+whole flow.
+
+A booking checks that the zone is the supplier's own and isn't deleted. It
+doesn't check that the client's coordinates are inside it. Book only a
+supplier search returned for those coordinates.
+</Step>
+</Steps>
+
+## Change the area later
+
+### Edit a zone
+
+`PATCH /suppliers/me/travel-zones/{travelZoneId}` with the changed fields and
+the zone's current `version`:
+
+```json
+// PATCH /v1/projects/{projectId}/suppliers/me/travel-zones/{travelZoneId}
+{ "travelDistance": 15, "version": 1 }
+```
+
+A stale `version` changes nothing. Re-read the zone and try again:
+
+```json
+{
+  "code": "VERSION_CONFLICT",
+  "message": "Travel zone was modified by another writer",
+  "statusCode": 409,
+  "requestId": "2f6c1a8e-7d3b-4e95-a0c2-5b9e3d7f1a46"
+}
+```
+
+**A change to the shape rewrites the schedules that use the zone.** The
+response carries `coverageRecompute: { total, failed }`, and each of those
+schedules gets a new `version`. Re-read a schedule before you next `PATCH`
+it, or you'll get `409 VERSION_CONFLICT` with `Schedule was modified by
+another writer`. A `failed` schedule keeps its old coverage until it's next
+saved. A rename leaves the schedules alone.
+
+### Remove a zone, or stop working in it
+
+Two deletes cascade, or fail to, in ways that are easy to miss:
+
+- **Deleting a zone doesn't touch its schedules.** `DELETE` on a zone that an
+  `ACTIVE` schedule uses succeeds with `204`. The schedule keeps naming the
+  deleted zone and quietly covers no one. Setting the zone's `active` to
+  `false` does the same. Delete or change the schedules first.
+- **Deleting a schedule deletes its zone.** `DELETE` on a schedule whose
+  `travelZoneRef` names one of the supplier's own zones soft-deletes that zone
+  too, even when another schedule uses it. To keep the zone, change the
+  schedule's `status` to `INACTIVE` instead, or point the other schedules at
+  a new zone first.
+
+To take time off inside an area without touching the schedule, block the time
+instead. See [Block time off](/guides/build-a-supplier-portal#block-time-off).
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | Auth | Description |
+| --- | --- | --- | --- |
+| `/v1/projects/{projectId}/suppliers/me/travel-zones` | `POST`, `GET` | `x-api-key` + supplier `Bearer` | Create and list the supplier's own zones. |
+| `/v1/projects/{projectId}/suppliers/me/travel-zones/{travelZoneId}` | `GET`, `PATCH`, `DELETE` | `x-api-key` + supplier `Bearer` | Read, change (send `version`), soft-delete. |
+| `/v1/projects/{projectId}/suppliers/me/schedules` | `POST`, `GET` | `x-api-key` + supplier `Bearer` | Create and list working hours. |
+| `/v1/projects/{projectId}/suppliers/me/schedules/{scheduleId}` | `GET`, `PATCH`, `DELETE` | `x-api-key` + supplier `Bearer` | Read, change (send `version`), delete. |
+| `/v1/projects/{projectId}/locations?locationType=TRAVEL_ZONE` | `GET` | `x-api-key` | The project's shared zones, with their shapes. Read-only. |
+| `/v1/projects/{projectId}/suppliers/{supplierId}` | `GET` | `x-api-key` | The supplier's zones in `locations[]`, and live schedules. |
+| `/v1/projects/{projectId}/suppliers?lat=&lng=` | `GET` | `x-api-key` | Suppliers whose zone covers a point. |
+| `/v1/projects/{projectId}/availability/suppliers` | `POST` | `x-api-key` | Open times at a point. |
+
+### Errors and edge cases
+
+| Scenario | `code` | Status | Resolution |
+| --- | --- | --- | --- |
+| A key-only call to a `/suppliers/me` route | `HTTP_ERROR` | `401` | There's no user token. Zones and schedules are written as the signed-in supplier. |
+| `CIRCULAR` without `travelDistance` or `travelDistanceUnit`, or `DRAWN` without `travelRegions` | `VALIDATION_ERROR` | `400` | Send exactly the fields of the zone's type. |
+| A stale `version` on a zone | `VERSION_CONFLICT` | `409` | `Travel zone was modified by another writer`. Re-read and retry. |
+| A stale `version` on a schedule, often after a zone's shape changed | `VERSION_CONFLICT` | `409` | `Schedule was modified by another writer`. Re-read and retry. |
+| Two `ACTIVE` schedules of one supplier with hours that overlap | `CONFLICT` | `409` | Change the dates or hours, or make one `INACTIVE`. |
+| No timezone on the schedule, the profile or the project | `BAD_REQUEST` | `400` | Set the supplier's profile `timezone`, or send `timezone`. |
+| An offering the supplier doesn't offer, or that isn't `ACTIVE` | `BAD_REQUEST` | `400` | Link the supplier to the service first. See [Provision your catalog and suppliers](/guides/provision-catalog-and-suppliers). |
+| A `TRAVEL_ZONE` booking with a project zone's `loc_` id | `NOT_FOUND` | `404` | `Booking location loc_… not found`. Use the supplier's own `stz_` zone. |
+| A `TRAVEL_ZONE` booking with another supplier's zone | `BAD_REQUEST` | `400` | `Travel zone stz_… belongs to supplier sup_…, not the booking's supplier sup_…`. Take the zone from this supplier's `locations[]`. |
+| Search doesn't find a supplier you just set up | — | — | Wait a moment for the index, then check the zone with `GET /suppliers?lat=&lng=`. |
+
+See [Errors](/concepts/errors) for the envelope, and
+[Concurrency](/concepts/concurrency#optimistic-versioning-on-updates) for
+`version`.

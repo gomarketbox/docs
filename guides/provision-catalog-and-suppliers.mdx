@@ -1,0 +1,392 @@
+---
+title: Provision your catalog and suppliers
+description: Create a service, its business models, offerings and packages, publish it, and add the suppliers who deliver it, from your own system with an API key.
+---
+
+An agency or a platform that runs many businesses usually keeps its catalog
+in its own system and pushes it into MarketBox. This guide is that setup, in
+the order the API needs it:
+
+1. **Service**: the sellable thing. It starts `DRAFT`.
+2. **Business models**: how the service is sold (single sessions, packages).
+3. **Offerings**: the bookable variants, each with a duration and a price.
+4. **Packages**: prepaid bundles of sessions of one offering, if you sell them.
+5. **Publish** the service: `LIVE`.
+6. **Suppliers**: who delivers it, linked to the service, with a photo.
+7. **Hours**: the supplier's schedule. An API key can't write these.
+
+Every call is server-side, with the `x-api-key` header. Paths in the prose are
+relative to the project: `POST /services` is
+`POST /v1/projects/{projectId}/services`. Ids come back on each create response:
+keep them, because the next step needs them.
+
+<Warning>
+**A retried create can make a duplicate.** The catalog routes take no
+idempotency key. A second `POST` of the same offering, business model or
+package creates a second one. A service or supplier is protected by its
+unique name or email, which answers `409 CONFLICT`. After a timeout, list what
+exists before you retry.
+</Warning>
+
+<Steps>
+<Step title="Create the service">
+```json
+// POST /v1/projects/{projectId}/services
+{
+  "name": { "en": "Private swim lesson" },
+  "description": { "en": "One-to-one coaching in your pool." },
+  "primaryLanguage": "en",
+  "taxSettings": { "taxable": true, "taxPercentage": 13 }
+}
+```
+
+`name` and `description` are localized: one string per language, keyed by
+language code. The `201` returns the service in `data`, with its `serviceId`
+and `status: "DRAFT"`. A new service is always `DRAFT`, whatever you send.
+
+Names are unique in a project, per language:
+
+```json
+{
+  "code": "CONFLICT",
+  "message": "A service with this name already exists in the project",
+  "statusCode": 409,
+  "requestId": "5d1a8c3f-2b7e-4f96-a0d4-9c6e3b1f7a52"
+}
+```
+
+`taxSettings` is the service's own tax, used when no price rule sets tax. See
+[How tax is computed](/resources/orders#how-tax-is-computed).
+
+A service has no `externalId`. Store the `serviceId` against your own record.
+</Step>
+
+<Step title="Add the business models">
+A business model says how the service is sold. An order line needs one that
+matches it:
+
+| To sell | The service needs an active business model of type |
+| --- | --- |
+| A single session (`SINGLE_SESSION` order line) | `SINGLE_BOOKING` |
+| A package (`PACKAGE` order line) | `PACKAGE` or `SCHEDULED_PACKAGE`. To **create** a package, it must be `PACKAGE`. |
+
+```json
+// POST /v1/projects/{projectId}/services/{serviceId}/business-models
+{
+  "type": "SINGLE_BOOKING",
+  "paymentOptions": ["PAY_WHILE_BOOKING"]
+}
+```
+
+Post a second one with `"type": "PACKAGE"` and
+`"paymentOptions": ["PAY_FULL_PRICE_WHILE_PURCHASING"]` to sell packages. You
+can also send both inline, as `businessModels`, on the service create.
+
+A business model is active when it's created. Turn one off or on with
+`POST /services/{serviceId}/business-models/{businessModelId}/status` and
+`{ "active": false }`. It's a boolean, not a status.
+
+A service with no active `SINGLE_BOOKING` model creates, publishes and lists
+fine. It fails only when a client orders it:
+
+```json
+{
+  "code": "SERVICE_NOT_SOLD_AS",
+  "message": "Service srv_01kv60qg12e82acr78edfnjhvv is not sold as a single booking; it has no active SINGLE_BOOKING rate",
+  "statusCode": 422,
+  "requestId": "8b4e2d7a-1c9f-4a63-b5e0-3d7a9c2f6e14"
+}
+```
+
+Business models can also carry booking fees. See
+[Service fees](/concepts/service-fees).
+</Step>
+
+<Step title="Create the offerings">
+An offering is what a client actually books: a duration and a price.
+
+```json
+// POST /v1/projects/{projectId}/services/{serviceId}/offerings
+{
+  "name": { "en": "60 minutes" },
+  "duration": { "type": "FIXED", "minutes": 60 },
+  "pricing": [
+    { "ruleId": "default", "scope": "DEFAULT", "price": { "amount": 4500, "currency": "CAD" } },
+    { "ruleId": "us", "scope": "COUNTRY", "country": "US", "price": { "amount": 3500, "currency": "USD" } }
+  ]
+}
+```
+
+- **Amounts are integer minor units.** `4500` is $45.00. A decimal is a `400`.
+- **`pricing` needs exactly one `DEFAULT` rule.** It's the price wherever no
+  more specific rule matches. Add `COUNTRY`, `STATE` and `POSTAL` rules for
+  regional prices. See [Regional pricing](/concepts/regional-pricing).
+- **`ruleId` is yours.** Give each rule a stable name of your choosing.
+
+No `DEFAULT` rule, or two of them, is refused:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "pricing: pricing must contain exactly one DEFAULT rule",
+  "statusCode": 400,
+  "requestId": "3c7f1a9e-6d2b-4e58-9a04-1f8c5d3b7e26"
+}
+```
+
+An offering is `ACTIVE` when it's created. Only an `ACTIVE` offering can be
+ordered or booked: any other is `400 BAD_REQUEST`, `Offering off_… is not
+orderable (status: INACTIVE)`. Change it with
+`POST /services/{serviceId}/offerings/{offeringId}/status` and
+`{ "status": "INACTIVE" }`.
+
+`skillIds` and `locationIds` on an offering must name existing, active skills
+and Locations. Both are read-only on the public API: see
+[Locations and skills](/resources/locations).
+</Step>
+
+<Step title="Create the packages">
+A package is a prepaid bundle of sessions of one offering. Create it under
+that offering:
+
+```json
+// POST /v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}/packages
+{
+  "name": { "en": "10-lesson pack" },
+  "creditCount": 10,
+  "pricing": [
+    { "ruleId": "default", "scope": "DEFAULT", "price": { "amount": 40500, "currency": "CAD" } }
+  ],
+  "validityDays": 180,
+  "status": "DRAFT"
+}
+```
+
+- `creditCount` is the number of sessions.
+- `pricing` is the price of the **whole package**, with the same one-`DEFAULT`
+  rule as an offering.
+- `validityDays` is how long the sessions stay bookable after purchase. Leave
+  it out and they never expire.
+- **A package is `ACTIVE` unless you send `status`.** An `ACTIVE` package is
+  on sale at once. Send `"status": "DRAFT"` while you set things up.
+
+The service needs an active `PACKAGE` business model. A `SCHEDULED_PACKAGE`
+one isn't enough to create a package:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Service has no active PACKAGE business model; cannot create packages",
+  "statusCode": 400,
+  "requestId": "6e2a9d4b-8c1f-4b73-a5d0-2f7e1c9b3a68"
+}
+```
+
+Put the package on sale with `POST /packages/{packageId}/status` and
+`{ "status": "ACTIVE" }`. `ARCHIVED` takes it off sale. List a service's packages with
+`GET /services/{serviceId}/packages`.
+</Step>
+
+<Step title="Publish the service">
+```json
+// POST /v1/projects/{projectId}/services/{serviceId}/status
+{ "status": "LIVE" }
+```
+
+The allowed moves:
+
+| From | To |
+| --- | --- |
+| `DRAFT` | `LIVE`, `INACTIVE` |
+| `LIVE` | `INACTIVE` |
+| `INACTIVE` | `LIVE` |
+
+Nothing goes back to `DRAFT`. Any other move, including `LIVE` to `LIVE`, is a
+`400`:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Cannot transition service status from LIVE to DRAFT",
+  "statusCode": 400,
+  "requestId": "1f8c4a2e-7b3d-4d96-b0e5-9a6c2f1d8b37"
+}
+```
+
+**Publishing checks nothing else.** A service with no offerings, no business
+models and no prices goes `LIVE`. Publish last, once the steps above are done.
+
+Only a `LIVE` service appears in a supplier's `services` on
+`GET /suppliers` and in search results. A `DRAFT` one is linked but hidden.
+</Step>
+
+<Step title="Create the suppliers">
+```json
+// POST /v1/projects/{projectId}/suppliers
+{
+  "firstName": "Maya",
+  "lastName": "Chen",
+  "email": "maya.chen@example.com",
+  "timezone": "America/Toronto",
+  "country": "CA",
+  "state": "ON",
+  "city": "Toronto",
+  "externalId": "coach-1042",
+  "serviceIds": ["srv_01kv60qg12e82acr78edfnjhvv"]
+}
+```
+
+- `firstName`, `lastName` and `email` are required. The email is unique in the
+  project: a second supplier with it is `409 CONFLICT`, `A supplier with this
+  email already exists in the project`.
+- `serviceIds` links the supplier to the services they deliver. An id that
+  isn't a service is `400 BAD_REQUEST`, `Unknown serviceId(s): srv_…`. Link
+  one more later with `POST /suppliers/{supplierId}/services/{serviceId}`.
+- `skillIds` lists the supplier's skills. An offering that requires a skill
+  is offered only by suppliers who have it.
+- `timezone` is the zone the supplier's hours are written in. Without it, the
+  supplier uses the project's default zone.
+- `externalId` is your own id for the supplier. It comes back on every read,
+  but you can't search by it. Keep the `supplierId` in your own system too.
+
+A supplier is `active` when created. Update one with
+`PUT /suppliers/{supplierId}`: send only the fields that change.
+`serviceIds` and `skillIds`, when sent, replace the whole set. See
+[Managing suppliers](/resources/suppliers#managing-suppliers).
+</Step>
+
+<Step title="Add the supplier's photo">
+The photo upload is three calls. You never send the image to MarketBox
+directly.
+
+1. Ask for an upload URL:
+
+   ```json
+   // POST /v1/projects/{projectId}/suppliers/{supplierId}/avatar/upload-url
+   { "contentType": "image/jpeg", "contentLength": 482113 }
+   ```
+
+   `contentType` is `image/jpeg`, `image/png` or `image/webp`.
+   `contentLength` is the file's size in bytes, at most 5 MB. The `200`
+   returns `uploadId`, `variantId`, `url`, `method: "PUT"` and `headers`.
+2. `PUT` the file's bytes to `url`, with exactly the `headers` you were
+   given, within 300 seconds. Add no headers of your own.
+3. Attach it:
+
+   ```json
+   // PUT /v1/projects/{projectId}/suppliers/{supplierId}/avatar
+   { "uploadId": "<uploadId>", "variantId": "<variantId>" }
+   ```
+
+MarketBox resizes the image after the upload. If you attach it before that's
+done, retry after a second:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Avatar variant not ready yet. Retry shortly.",
+  "statusCode": 400,
+  "requestId": "9d3b7e1a-4c2f-4a85-b6e0-8f1d5c9a2e73"
+}
+```
+
+The response is the supplier, with `avatarUrl` set.
+</Step>
+
+<Step title="Get the supplier's hours set">
+**An API key can't write a supplier's schedule, blocked time or travel
+zones.** Those routes exist only on the supplier plane, as the signed-in
+supplier. So a supplier you've just created is in the catalog, but nobody can
+book them yet.
+
+Either the supplier sets their own hours, in your
+[supplier portal](/guides/build-a-supplier-portal#set-working-hours) or in the
+MarketBox dashboard, or the business sets them in the dashboard. For a supplier
+who travels to clients, see
+[Set up a mobile supplier's service area](/guides/set-up-a-mobile-supplier-service-area).
+
+To use your portal, the business invites the supplier to the project from the
+dashboard, and the supplier accepts. See
+[Before you start](/guides/build-a-supplier-portal#before-you-start).
+
+Check from your server with `GET /suppliers/{supplierId}`.
+`availability.schedules: []` means the supplier has no live schedule and
+can't be booked, even with `active: true`.
+</Step>
+</Steps>
+
+## A supplier is bookable when
+
+- they're `active`;
+- they're linked to the service, and have every skill the offering requires;
+- they have an `ACTIVE` schedule that covers the offering, at a venue or in a
+  travel zone;
+- the offering is `ACTIVE`, with its `DEFAULT` price;
+- the service has an active business model for the way you sell it.
+
+Then search finds them. See
+[Search suppliers by availability](/guides/search-suppliers-by-availability),
+and [Client checkout, end to end](/guides/client-checkout-end-to-end) for the
+booking itself.
+
+## Keep it in sync
+
+- **Store MarketBox's ids.** Services, offerings, business models and packages
+  carry no id of yours, so keep `serviceId`, `offeringId`, `businessModelId`
+  and `packageId` against your own records.
+- **Use the ids from the responses.** Updating or changing the status of an
+  offering or a business model doesn't check the id exists, so a mistyped id
+  doesn't return `404`.
+- **Replace whole values on `PUT`.** On `PUT /services/{serviceId}`, `name`,
+  `description` and `participantSettings` replace the stored value. Send the
+  full object, not only the changed language.
+- **Retire instead of deleting.** Set an offering `INACTIVE`, a package
+  `ARCHIVED` and a service `INACTIVE`. Orders and bookings that already use
+  them keep their snapshot of the price.
+- **Lists aren't paginated.** `GET /services`, its offerings, business models
+  and packages return everything in one page.
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/v1/projects/{projectId}/services` | `POST`, `GET` | Create a service (`DRAFT`), list services. |
+| `/v1/projects/{projectId}/services/{serviceId}` | `GET`, `PUT` | Read, update. |
+| `/v1/projects/{projectId}/services/{serviceId}/status` | `POST` | `DRAFT`, `LIVE`, `INACTIVE`. |
+| `/v1/projects/{projectId}/services/{serviceId}/business-models` | `POST`, `GET` | Add and list business models. |
+| `/v1/projects/{projectId}/services/{serviceId}/business-models/{businessModelId}/status` | `POST` | `{ "active": true }` or `false`. |
+| `/v1/projects/{projectId}/services/{serviceId}/offerings` | `POST`, `GET` | Create and list offerings. |
+| `/v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}/status` | `POST` | `ACTIVE`, `INACTIVE`. |
+| `/v1/projects/{projectId}/services/{serviceId}/offerings/{offeringId}/packages` | `POST` | Create a package of that offering. |
+| `/v1/projects/{projectId}/services/{serviceId}/packages` | `GET` | List the service's packages. |
+| `/v1/projects/{projectId}/packages/{packageId}/status` | `POST` | `DRAFT`, `ACTIVE`, `ARCHIVED`. |
+| `/v1/projects/{projectId}/suppliers` | `POST` | Create a supplier. |
+| `/v1/projects/{projectId}/suppliers/{supplierId}` | `GET`, `PUT` | Read (with `availability`), update. |
+| `/v1/projects/{projectId}/suppliers/{supplierId}/services/{serviceId}` | `POST`, `DELETE` | Link or unlink one service. |
+| `/v1/projects/{projectId}/suppliers/{supplierId}/avatar/upload-url` | `POST` | Get a photo upload URL. |
+| `/v1/projects/{projectId}/suppliers/{supplierId}/avatar` | `PUT`, `DELETE` | Attach or remove the photo. |
+
+All take the API key alone.
+
+### Errors and edge cases
+
+| Scenario | `code` | Status | Resolution |
+| --- | --- | --- | --- |
+| A service name already used in that language | `CONFLICT` | `409` | Rename it, or update the existing service. |
+| A move the status table doesn't allow | `BAD_REQUEST` | `400` | `Cannot transition service status from … to …`. Nothing returns to `DRAFT`. |
+| `pricing` without exactly one `DEFAULT` rule | `VALIDATION_ERROR` | `400` | Send one `scope: "DEFAULT"` rule. |
+| A decimal amount | `VALIDATION_ERROR` | `400` | Send integer minor units. |
+| A skill or Location on an offering that doesn't exist or isn't active | `BAD_REQUEST` | `400` | `Skill skl_… not found or inactive`. Take ids from `GET /skills` and `GET /locations`. |
+| A package on a service with no active `PACKAGE` business model | `BAD_REQUEST` | `400` | Add a `PACKAGE` business model first. |
+| A package for an offering of another service | `NOT_FOUND` | `404` | `Offering not found for this service`. |
+| A supplier email already used | `CONFLICT` | `409` | Update the existing supplier. |
+| A `serviceIds` entry that isn't a service | `BAD_REQUEST` | `400` | `Unknown serviceId(s): …`. |
+| A photo over 5 MB, or another image type | `VALIDATION_ERROR` | `400` | Resize, or convert to JPEG, PNG or WebP. |
+| Attaching the photo too soon | `BAD_REQUEST` | `400` | `Avatar variant not ready yet. Retry shortly.` Retry after a second. |
+| A key-only call to write a schedule or travel zone | `HTTP_ERROR` | `401` | There's no user token. The supplier, or the dashboard, sets hours. |
+| Ordering a service with no active `SINGLE_BOOKING` business model | `SERVICE_NOT_SOLD_AS` | `422` | Add the business model. |
+| Ordering an offering with no `DEFAULT` price | `OFFERING_NOT_PRICED` | `422` | Give the offering a `DEFAULT` rule. |
+
+See [Errors](/concepts/errors) for the envelope.

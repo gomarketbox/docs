@@ -373,8 +373,11 @@ Two traps in `weeklyHours`:
 
 `travelZone.source` distinguishes a zone drawn for this supplier alone
 (`SUPPLIER_TRAVEL_ZONE`, an `stz_` id) from a project-wide zone several
-suppliers share (`PROJECT_LOCATION`, a `loc_` id). Both are booked the same
-way; the distinction only matters if you draw a coverage map.
+suppliers share (`PROJECT_LOCATION`, a `loc_` id). Search finds a supplier in
+either kind of zone, but only a supplier's own zone can be booked at a client's
+address: a `TRAVEL_ZONE` booking's `locationId` must be an `stz_` id, and a
+`loc_` id is `404 NOT_FOUND`. See
+[Set up a mobile supplier's service area](/guides/set-up-a-mobile-supplier-service-area#the-suppliers-own-zone-or-a-project-zone).
 
 Only **live** schedules are returned — `ACTIVE`, not deleted, and `endDate` not
 yet passed in the schedule's own `timezone`. `schedules: []` means the supplier
@@ -475,6 +478,9 @@ API exposes it too, so you can keep a roster in sync from your own system:
 
 Use `externalId` to carry your own primary key onto the supplier, so you can
 reconcile without storing a second id map.
+
+For the whole setup in order, from service to bookable supplier, see
+[Provision your catalog and suppliers](/guides/provision-catalog-and-suppliers).
 
 Three profile fields have write rules worth knowing:
 

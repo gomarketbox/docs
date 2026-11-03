@@ -1,0 +1,211 @@
+---
+title: Tracking state without webhooks
+description: What changes on its own after you write it — payment, cancellation cascades, hold expiry, the end of a session, disputes — and what to poll for each, and how often.
+---
+
+**The public API sends no webhooks.** Stripe's events go to MarketBox, not to
+you, and nothing calls your server when a booking or an order changes. To
+know that something changed, you read it again.
+
+That's simple for anything your own request changes: the response is the new
+state. This page is about the rest: the changes that happen **after** your
+request returns, or that someone else makes.
+
+## What changes on its own
+
+| What changes | What changes it | When | Read |
+| --- | --- | --- | --- |
+| An order becomes `PAID` after a card payment | Stripe's webhook to MarketBox | Usually a second or two after `stripe.confirmPayment` resolves. A webhook that never arrives is caught by a nightly reconciliation. | `GET /orders/{orderId}` |
+| A cancelled order's bookings become `CANCELLED` | The order-cancel cascade | Seconds after the order's status change returns | `GET /bookings/{bookingId}` for each booking |
+| A hold stops blocking time | Nothing: expiry is lazy | At `heldUntil`. Its `status` doesn't change. | `GET /holds/{reservationId}`, and compare `heldUntil` with now |
+| A booking becomes `AWAITING_CONFIRMATION` | An hourly sweep of ended bookings | Up to about an hour after `bookingEndUtc` | `GET /bookings?startDate=…&endDate=…` |
+| A booking becomes `COMPLETED`, `CLIENT_NO_SHOW`, `SUPPLIER_NO_SHOW` or `DISPUTED` | The supplier's attendance report, a client's report, or the MarketBox dashboard | Whenever they report | `GET /bookings/{bookingId}` |
+| A `COMPLETED` booking becomes `DISPUTED` | The client reports they didn't attend | Within 24 hours of `COMPLETED` | `GET /bookings/{bookingId}` |
+| A booking is cancelled or moved | The supplier, from your portal or the dashboard, or the business in the dashboard | Any time | `GET /bookings?startDate=…&endDate=…` |
+
+Two things never change on their own:
+
+- **Nothing completes a booking.** It waits in `AWAITING_CONFIRMATION` until
+  the supplier reports attendance, the business settles it, or your key sets
+  an outcome. No timer completes it. See
+  [The booking lifecycle](/resources/bookings#the-booking-lifecycle).
+- **Package credits don't expire by themselves.** A credit's `expiresAt` is
+  checked when someone tries to book it. Nothing changes on the order at that
+  instant.
+
+## An order becomes `PAID`
+
+A card payment settles when Stripe tells MarketBox, not when the browser says
+so. Poll the order:
+
+- **During checkout**, once a second for about 15 seconds after
+  `stripe.confirmPayment` resolves. That covers almost every payment. See
+  [Accept payments with Stripe](/guides/accept-payments-with-stripe).
+- **After that**, keep the `orderId` on your server and check it again: every
+  few minutes for the first hour, then hourly for a day. A payment whose
+  webhook was missed is settled by MarketBox's nightly reconciliation, so it
+  can take up to a day.
+
+`GET /transactions?orderId=…` shows the payment itself: a `STRIPE` row that is
+`PENDING` until Stripe confirms it, then `SUCCEEDED`.
+
+A cash, bank-transfer or comp payment you record with
+`POST /orders/{orderId}/transactions` settles in the same request. Its
+response is already the answer.
+
+<Warning>
+**If you converted a hold before `PAID`, reconcile.** Convert doesn't check
+payment. If you booked as soon as `confirmPayment` resolved, an order that
+never reaches `PAID` holds a booking nobody paid for. Decide what your
+business does with it, such as cancelling the booking or asking the client
+to pay again, and run that from the same job that polls.
+</Warning>
+
+## A cancelled order's bookings
+
+`POST /orders/{orderId}/status` with `CANCELLED` returns as soon as the order
+is cancelled. The order's bookings are cancelled **afterwards**, by a cascade
+that usually finishes within seconds. A booking you read straight after the
+call can still say `SCHEDULED`.
+
+The cascade:
+
+- cancels `SCHEDULED` and `STARTED` bookings, and returns their package
+  sessions to the order item;
+- leaves `AWAITING_CONFIRMATION` and `DISPUTED` bookings alone, because those
+  sessions have already happened;
+- leaves settled bookings alone;
+- sends the client one email listing every cancelled session, and each
+  supplier one listing theirs.
+
+It can't cancel a booking whose end has passed, even one that still reads
+`SCHEDULED` because the hourly sweep hasn't reached it. That booking becomes
+`AWAITING_CONFIRMATION` and waits for its outcome, like any session that
+happened.
+
+To confirm the cascade finished, read each booking the order funded. The
+`bookingId`s are the ones convert or `POST /bookings` returned. For a package,
+`GET /orders/{orderId}/package-bookings` lists them.
+
+## A hold lapses
+
+Nothing happens at `heldUntil`. The hold simply stops blocking the supplier's
+time, and anyone can book it. `GET /holds/{reservationId}` can still say
+`HELD` afterwards, so **compare `heldUntil` with the current time** rather
+than trusting `status`.
+
+You don't need to poll a hold. Keep it alive with the heartbeat while the
+client pays, and expect `409 HOLD_EXPIRED` if you convert too late. See
+[Hold slots during checkout](/guides/hold-slots-for-checkout).
+
+## A session ends
+
+A booking doesn't change at `bookingEndUtc`. An **hourly** sweep moves
+`SCHEDULED` and `STARTED` bookings that have ended to `AWAITING_CONFIRMATION`,
+so the change shows up to about an hour later.
+
+In that gap the booking still reads `SCHEDULED` or `STARTED`, and two things
+behave differently:
+
+- **Your key can't cancel it.** Cancelling is allowed only before
+  `bookingEndUtc`, or once the booking reads `AWAITING_CONFIRMATION`:
+
+  ```json
+  {
+    "code": "BAD_REQUEST",
+    "message": "Cannot transition booking status from SCHEDULED to CANCELLED",
+    "statusCode": 400,
+    "requestId": "5a9c2e7f-3b1d-4f68-a0e4-8d6b1c3f9e27"
+  }
+  ```
+
+  Wait for the sweep, then cancel.
+- **The supplier can still report attendance**, and that settles the booking
+  directly.
+
+Polling ended bookings more often than every 15 minutes gains you nothing,
+because the source moves hourly.
+
+## A booking is settled, or disputed
+
+The supplier's attendance report settles a booking: `COMPLETED` when they
+attended, `SUPPLIER_NO_SHOW` when they didn't. A client's report that they
+didn't attend turns the booking `DISPUTED` when the supplier says they did. It
+also turns a `COMPLETED` booking `DISPUTED` within **24 hours** of it
+becoming `COMPLETED`, whoever completed it.
+
+So **don't treat `COMPLETED` as final until 24 hours after its
+`statusUpdatedAt`.** If you pay suppliers, or report revenue, from completed
+bookings, run that 24 hours later. An operator resolves a `DISPUTED` booking
+in the MarketBox console. Your key can't. See
+[Attendance and disputes](/resources/bookings#attendance-and-disputes).
+
+## How to poll
+
+There's no "changed since" filter. Bookings and orders carry `updatedAt` and
+`version`, but no list filters on them. Two patterns cover most needs:
+
+- **Re-read the ids you're waiting on.** For a checkout, a cancellation or a
+  dispute window, poll `GET /orders/{orderId}` or `GET /bookings/{bookingId}`
+  until it reaches the state you expect.
+- **Re-read a window, and compare.** For "what changed today", list
+  `GET /bookings?startDate=…&endDate=…` and compare each booking's `version`
+  with the one you stored. A higher `version` means something changed.
+  `startDate` and `endDate` filter on when the session **starts**, in UTC, not
+  on when it changed, so choose a window that covers the sessions you care
+  about.
+
+```ts
+// A reconciler that runs every 15 minutes.
+// Window: sessions that started in the past 2 days, or start in the next 30.
+const from = new Date(Date.now() - 2 * 864e5).toISOString();
+const to = new Date(Date.now() + 30 * 864e5).toISOString();
+
+let cursor: string | undefined;
+do {
+  const url = new URL(
+    `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/bookings`,
+  );
+  url.searchParams.set('startDate', from);
+  url.searchParams.set('endDate', to);
+  url.searchParams.set('limit', '200');
+  if (cursor) url.searchParams.set('cursor', cursor);
+
+  const res = await fetch(url, { headers: { 'x-api-key': process.env.MARKETBOX_API_KEY! } });
+  const page = await res.json();
+  for (const booking of page.data) {
+    const known = await db.bookings.get(booking.bookingId); // your copy
+    if (!known || booking.version > known.version) {
+      await onBookingChanged(known, booking); // status, time, supplier…
+      await db.bookings.put(booking);
+    }
+  }
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+```
+
+Keep these in mind:
+
+- **A read straight after a write can be a second behind.** If a value looks
+  unchanged right after you changed it, read again.
+- **Back off on `429`.** Wait before you retry, for as long as the
+  `Retry-After` header says when there is one. See
+  [Retry guidance](/concepts/errors#retry-guidance).
+- **Poll by what you're waiting for.** Once a second for a checkout's payment,
+  every 15 minutes for the day's bookings, hourly for disputes. Polling
+  every booking every second spends your quota on nothing.
+
+## Suggested cadence
+
+| Waiting for | Poll | How often | Stop when |
+| --- | --- | --- | --- |
+| A checkout's payment | `GET /orders/{orderId}` | Every second | `PAID`, or after 15 seconds. Then hand it to the slow loop. |
+| A payment that didn't settle at checkout | `GET /orders/{orderId}` | Every few minutes, then hourly | `PAID` or `CANCELLED`, or after a day. Then flag it for a person. |
+| An order-cancel cascade | `GET /bookings/{bookingId}` for each | Every few seconds | No booking reads `SCHEDULED` or `STARTED` with an end still ahead. |
+| Sessions ending, and being settled | `GET /bookings?startDate=…&endDate=…` | Every 15 minutes | — |
+| The dispute window | `GET /bookings/{bookingId}` | Hourly | 24 hours after `statusUpdatedAt` on a `COMPLETED` booking. |
+| Changes made by suppliers or the business | `GET /bookings?startDate=…&endDate=…` | Every 15 minutes | — |
+
+MarketBox emails the client and the supplier about confirmations,
+cancellations and moves. You don't need to poll in order to notify them. See
+[Emails](/concepts/emails).

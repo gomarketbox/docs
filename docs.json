@@ -39,23 +39,29 @@
               "concepts/emails",
               "concepts/versioning",
               "concepts/timezones",
-              "concepts/concurrency"
+              "concepts/concurrency",
+              "concepts/tracking-state-without-webhooks"
             ]
           },
           {
             "group": "Guides",
             "pages": [
+              "guides/provision-catalog-and-suppliers",
               "guides/booking-flow-auth",
+              "guides/client-checkout-end-to-end",
               "guides/create-a-single-booking",
               "guides/show-a-package-storefront",
               "guides/create-a-package-booking",
               "guides/book-a-package-credit",
               "guides/availability-and-slates",
               "guides/hold-slots-for-checkout",
+              "guides/cancel-or-reschedule-a-booking",
               "guides/search-suppliers-by-availability",
               "guides/booking-addresses",
+              "guides/manage-a-client-account",
               "guides/accept-payments-with-stripe",
               "guides/build-a-supplier-portal",
+              "guides/set-up-a-mobile-supplier-service-area",
               "guides/report-site-events"
             ]
           },

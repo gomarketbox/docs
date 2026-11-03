@@ -113,7 +113,9 @@ to `DEFAULT`.
 </Warning>
 
 The full chain: `reservationId` → `locationId` → `address` → the client's
-default saved address → no region (`DEFAULT`).
+default saved address → no region (`DEFAULT`). A client sets their default
+with `PUT /clients/me/addresses/{addressId}/default`; see
+[Choose the default address](/guides/manage-a-client-account#choose-the-default-address).
 
 ### Errors from a bad region source
 

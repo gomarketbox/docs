@@ -446,6 +446,12 @@ for the others.
 
    **A travel zone on its own makes no one bookable.** The supplier is offered
    in an area only once an `ACTIVE` schedule references its zone.
+
+   **Use the supplier's own zone for in-home work.** Search offers a supplier
+   in a project zone, but a booking at a client's address needs the
+   supplier's own `stz_` id. A `loc_` project zone in its `locationId` is a
+   `404 NOT_FOUND`. See
+   [The supplier's own zone or a project zone](/guides/set-up-a-mobile-supplier-service-area#the-suppliers-own-zone-or-a-project-zone).
 3. To change it, `PATCH /schedules/{scheduleId}` with the changed fields and the
    row's current `version`.
 
@@ -567,7 +573,9 @@ For a `DRAWN` zone, send `travelRegions` (a GeoJSON `Polygon` or
 `MultiPolygon`) instead of the distance.
 
 A zone does nothing until a schedule names it in `travelZoneRef`. See
-[Set working hours](#set-working-hours).
+[Set working hours](#set-working-hours). For the whole setup in order, and how
+to check a client's address is covered, see
+[Set up a mobile supplier's service area](/guides/set-up-a-mobile-supplier-service-area).
 
 To change a zone, `PATCH` it with the changes and its current `version`. A stale
 `version` is `409 VERSION_CONFLICT`: re-read the zone and try again. `DELETE`
