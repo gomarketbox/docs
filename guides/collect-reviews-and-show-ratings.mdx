@@ -103,7 +103,8 @@ export async function POST(
 
 `signedInClientId` is the helper from
 [Create a single booking](/guides/create-a-single-booking). It calls
-`POST /clients/me` with the client's token and returns `data.clientId`.
+`POST /clients/me` with the client's token and returns `data.clientId`. See
+[Clients](/resources/clients#which-routes-need-which-credentials).
 
 **For a supplier**, ask the supplier plane. Call
 `GET /suppliers/me/bookings/{bookingId}` with the API key and the supplier's
@@ -422,7 +423,8 @@ Leave out `supplierId` to list every review of every supplier in the project.
 
 ## Show client ratings
 
-Suppliers rate clients too. Two routes read those reviews:
+Suppliers rate clients too. Two routes read those reviews. See
+[Clients](/resources/clients) for the rest of the client record.
 
 - `GET /clients/{clientId}/review-summary` returns the client's
   `averageRating` and `reviewCount`, with the same zero rule as a supplier.
