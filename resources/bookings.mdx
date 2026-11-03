@@ -24,12 +24,19 @@ SCHEDULED ──► STARTED ──► AWAITING_CONFIRMATION ──► DISPUTED
  COMPLETED · CLIENT_NO_SHOW · SUPPLIER_NO_SHOW · CANCELLED
     │             │                 │
     └─────────────┴─────────────────┴──► AWAITING_CONFIRMATION (operator reversal)
+
+ COMPLETED ──► DISPUTED (the client reports they didn't attend, within 24 hours)
 ```
 
 Each state on the top row can reach each outcome on the bottom row, except that
 a `SCHEDULED` booking reaches `COMPLETED` only through the supplier's own
 attendance report. A `SCHEDULED` booking that ends without being started moves
 straight to `AWAITING_CONFIRMATION`.
+
+**`COMPLETED` isn't final for 24 hours.** A client who reports that they didn't
+attend within 24 hours of the booking becoming `COMPLETED` moves it to
+`DISPUTED`, whoever completed it. Don't treat a booking as settled until that
+window has passed. See [Attendance and disputes](#attendance-and-disputes).
 
 `status` on every booking response is one of nine values:
 
@@ -38,8 +45,8 @@ straight to `AWAITING_CONFIRMATION`.
 | `SCHEDULED` | Created, not yet started. The only start state. | Booking creation. Nothing transitions *into* it. |
 | `STARTED` | The session is under way. | Your key, once `bookingStartUtc` has passed. The supplier plane has no route that sets it. |
 | `AWAITING_CONFIRMATION` | The session has ended and the booking is waiting to be settled. It stays here until the supplier reports attendance, or your key or an operator sets an outcome. | The platform, when `bookingEndUtc` passes. An operator can also reverse a settled booking back here within a window. |
-| `DISPUTED` | The client and supplier reported different things about attendance. | The platform only. Resolved by an operator in the MarketBox console. |
-| `COMPLETED` | Delivered. | The supplier's own report that they attended, or your key. Nothing completes a booking automatically. |
+| `DISPUTED` | The client reported that they didn't attend, and the booking was otherwise going to be (or had just been) `COMPLETED`. | The platform, when an attendance report is filed. See [Attendance and disputes](#attendance-and-disputes). Resolved by an operator in the MarketBox console. |
+| `COMPLETED` | Delivered. | The supplier's own report that they attended, or your key. Nothing completes a booking automatically. A client can still dispute it for 24 hours. |
 | `CLIENT_NO_SHOW` | The client did not attend. | Your key, after a grace period past the start. No attendance report sets it: a report says only whether its own side attended. |
 | `SUPPLIER_NO_SHOW` | The supplier did not attend. | The supplier's own report that they did not attend, or your key after the same grace period. |
 | `CANCELLED` | Called off. **Hard-terminal**: money may have moved, so nothing leaves this state. | The supplier, through the [supplier plane](/guides/build-a-supplier-portal), only while the booking is `SCHEDULED` and before `bookingEndUtc`. Your key, also from `STARTED` (before `bookingEndUtc`) and from `AWAITING_CONFIRMATION`. An operator, also from `DISPUTED`. |
@@ -56,7 +63,9 @@ The supplier's own attendance report is filed through the
 [supplier plane](/guides/build-a-supplier-portal#bookings-and-the-attendance-report).
 A report you file with your key, through
 `POST /v1/projects/{projectId}/bookings/{bookingId}/reports`, is recorded, but
-filing it doesn't change the booking's status.
+filing it doesn't change the booking's status. A `CLIENT` report saying the
+client didn't attend still counts later: see
+[Attendance and disputes](#attendance-and-disputes).
 
 <Note>
   **What an API key may do.** A key carries every transition an operator
@@ -74,6 +83,31 @@ A transition the booking cannot make from where it stands is a
 rejection tells you what to retry from. `409 VERSION_CONFLICT` means the
 booking changed underneath you — re-read it and decide again. See
 [Errors](/concepts/errors).
+
+### Attendance and disputes
+
+Each side of a booking files at most one attendance report, saying whether
+**that side** attended. The supplier's report settles the booking. The client's
+report never settles it, but it can open a dispute. MarketBox decides when a
+report is filed. No job settles bookings later.
+
+| Situation | Result |
+| --- | --- |
+| The supplier reports `attended: true`, and no client report says `attended: false` | `COMPLETED` |
+| The supplier reports `attended: true`, and a client report already says `attended: false` | `DISPUTED` |
+| The supplier reports `attended: false` | `SUPPLIER_NO_SHOW`, whatever the client said |
+| The client reports `attended: false` before the supplier has reported | Recorded. The booking waits for the supplier. |
+| The client reports `attended: false` within 24 hours of the booking becoming `COMPLETED` | `DISPUTED`, whoever completed it: the supplier's report, an operator or your key |
+| The client reports `attended: false` more than 24 hours after `COMPLETED` | Recorded only |
+| The client reports `attended: true` | Recorded only |
+| Nobody reports | Stays `AWAITING_CONFIRMATION` |
+
+The 24 hours run from the instant the booking became `COMPLETED`, which is its
+`statusUpdatedAt` while it is `COMPLETED`. A client report you file with your
+key counts toward the second row. It doesn't open a dispute on a `COMPLETED`
+booking: that comes from the client's own report in MarketBox, such as the
+review page MarketBox emails them. An operator resolves a `DISPUTED` booking
+in the MarketBox console. Your key can't.
 
 ### `NO_SHOW` can no longer be set
 
@@ -270,6 +304,15 @@ be claimed, you get a `409` and nothing is written:
 See [Concurrency](/concepts/concurrency#the-three-supplier-time-conflicts) for
 the `conflicts[]` shape.
 
+The booking's location and price are checked in the same write:
+
+| Status | `code` | Meaning |
+| --- | --- | --- |
+| `404` | `NOT_FOUND` | `locationId` names no Location or travel zone in this project, such as "Booking location loc_01kx16f2a0h8a2my9u3f4tv0sp not found". |
+| `400` | `BAD_REQUEST` | The location is the wrong type for `locationType`, or a travel zone of another supplier. `message` names it, such as "Location loc_01kx16f2a0h8a2my9u3f4tv0sp has locationType TRAVEL_ZONE, expected PHYSICAL for this booking". |
+| `422` | `UNPROCESSABLE_ENTITY` | A `PHYSICAL` Location has no coordinates: "Location loc_01kx16f2a0h8a2my9u3f4tv0sp is missing latitude/longitude coordinates". The business fixes the Location. Resending won't help. |
+| `422` | `OFFERING_NOT_PRICED` | The offering has no `DEFAULT` price rule: "Offering has no DEFAULT price rule". The business adds one. Resending won't help. |
+
 <Note>
   **Note fan-out is non-atomic.** If a note write fails after the
   booking is created, the booking still exists with fewer notes than
@@ -303,6 +346,17 @@ field, so a `clientId` in the body is dropped and the booking keeps its client.
 
 If you change any time field, the server recomputes all four local
 fields against the (possibly new) `bookingTz`.
+
+A change is refused, with nothing written, when:
+
+| Status | `code` | Meaning |
+| --- | --- | --- |
+| `409` | `VERSION_CONFLICT` | The booking changed since you read it. Re-read it and decide again. |
+| `409` | `SLOT_HELD` / `SLOT_BOOKED` | The new time or supplier is taken. The body carries `conflicts[]` and `hint`, as on create. Offer another time. |
+| `409` | `OCCUPANCY_CONTENTION` | The supplier's calendar is under heavy concurrent writes. Retry. |
+| `404` | `NOT_FOUND` | The booking, the supplier or the location doesn't exist. |
+| `400` | `BAD_REQUEST` | The booking can't take the location change, for example a travel zone of another supplier. |
+| `422` | `UNPROCESSABLE_ENTITY` | The booking's `PHYSICAL` Location has no coordinates. |
 
 A supplier can also cancel or move their own booking from your portal, when
 the service's [participant settings](/concepts/booking-engine-model#participant-settings)

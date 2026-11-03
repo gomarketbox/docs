@@ -57,7 +57,8 @@ route) adds `conflicts[]` and `hint`:
       "endUtc": "2026-07-15T15:00:00.000Z",
       "reservationId": "resv_01kv8p20m1gnqvxl92xln6awk8",
       "bookingId": null,
-      "heldUntil": "2026-07-15T13:35:00.000Z"
+      "heldUntil": "2026-07-15T13:35:00.000Z",
+      "supplierId": "sup_01kv60qge5eh59ap0gw0pqrrys"
     }
   ],
   "hint": "This time is held (reservation resv_01kv8p2…). Convert the hold via POST /v1/projects/{projectId}/holds/{reservationId}/convert, or release it…"
@@ -65,8 +66,9 @@ route) adds `conflicts[]` and `hint`:
 ```
 
 `conflicts[]` names **what** is blocking you (a `reservationId` for a `HOLD`, a
-`bookingId` for a `BOOKING`) and `hint` names **what to do next** — both are
-meant to be read programmatically.
+`bookingId` for a `BOOKING`) and **whose** calendar it blocks (`supplierId`,
+`null` when unknown). `hint` names **what to do next**. Both are meant to be
+read programmatically.
 
 A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 
@@ -113,11 +115,12 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | `INVALID_ORDER_ITEM_REFERENCE`          | 400    | `POST .../bookings`: the service line's `orderItemId` isn't an item of its `orderId`. Check both ids. |
 | `REVIEW_ALREADY_EXISTS`                 | 409    | `POST .../bookings/{bookingId}/reviews`: the booking already has a review in that direction. Don't retry. |
 | `INVALID_CURSOR`                        | 400    | `GET .../suppliers/me/alerts` only: the `cursor` isn't one this list issued, or came from another `filter`. Request the first page again without it. See [Build a supplier portal](/guides/build-a-supplier-portal#alerts). |
-| `VERSION_CONFLICT`                      | 409    | Concurrent modification — re-read the resource and try again.                           |
-| `CONFLICT`                              | 409    | Generic write conflict covering situations like a booking that's already at capacity, or a client that's already registered as a participant on it. Also `DELETE .../suppliers/{supplierId}` when the supplier's sign-in changed during the delete — try again. `message` names the specific problem. |
+| `VERSION_CONFLICT`                      | 409    | Concurrent modification — re-read the resource and try again. Also a stale `version` on a supplier's schedule, blocked time or travel zone, or another write landing on one during its `DELETE`. |
+| `CONFLICT`                              | 409    | Generic write conflict covering situations like a booking that's already at capacity, or a client that's already registered as a participant on it. Also an `ACTIVE` schedule that overlaps another `ACTIVE` one, and `DELETE .../suppliers/{supplierId}` when the supplier's sign-in changed during the delete — try again. `message` names the specific problem. |
 | `SLOT_BOOKED`                           | 409    | The supplier's time is already taken by a confirmed booking. `conflicts[]` names the `bookingId`. Not retryable — search availability again. |
 | `SLOT_HELD`                             | 409    | The supplier's time is claimed by a live hold — often **your own**. `conflicts[]` names the `reservationId`; convert it instead of booking directly. See [Hold slots during checkout](/guides/hold-slots-for-checkout#handling-a-held-slot). |
 | `OCCUPANCY_CONTENTION`                  | 409    | Too many concurrent writes on one supplier's day; the internal retry gave up. **Retryable** — resend after a short backoff. |
+| `OFFERING_NOT_PRICED`                   | 422    | The offering has no `DEFAULT` price rule, so nothing can be priced: "Offering has no DEFAULT price rule". Any write that prices it can return this: order create, adding an order item, booking create, hold convert and package bookings. The business adds a `DEFAULT` rule. Don't retry. |
 | `ORDER_ITEM_BUSINESS_MODEL_MISMATCH`    | 400    | A booking line names a `businessModelType` its order item is not sold as, such as `PACKAGE` against a `SINGLE_SESSION` item. Send the kind the order item was sold as. See [Bookings](/resources/bookings#creating-a-booking). |
 | `TAX_MISMATCH`                          | 400    | You sent `tax` on `PATCH .../orders/{orderId}`, and it is not both the tax the lines compute and the tax the order stores — or the order has lines in a different currency. Nothing was written. Omit `tax`: the platform computes it. See [Orders](/resources/orders#updating-an-order). |
 | `ORDER_NOT_SETTLED`                     | 409    | You asked `POST .../orders/{orderId}/status` for `PAID`. An order becomes `PAID` only when its ledger covers its total. Record the payment instead of retrying. See [Orders](/resources/orders#settling-an-order). |

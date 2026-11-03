@@ -3684,7 +3684,7 @@
             }
           },
           "409": {
-            "description": "The booking is not scheduled (BOOKING_NOT_SCHEDULED), changes have closed for it (NOTICE_WINDOW_PASSED), the new time is not available (SLOT_UNAVAILABLE) or could not be checked (SLOT_UNVERIFIABLE), or the booking changed since it was read (VERSION_CONFLICT)",
+            "description": "The booking is not scheduled (BOOKING_NOT_SCHEDULED), changes have closed for it (NOTICE_WINDOW_PASSED), the new time is not available (SLOT_UNAVAILABLE) or could not be checked (SLOT_UNVERIFIABLE), the booking changed since it was read (VERSION_CONFLICT), or the supplier calendar is under heavy contention (OCCUPANCY_CONTENTION; retry)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3788,7 +3788,7 @@
                             }
                           },
                           "required": ["settlesTo", "consequences"],
-                          "description": "What filing `attended: true` would do to the booking now; null when it settles nothing."
+                          "description": "What filing `attended: true` would do now, judged from the booking alone; the other party’s report is never read, so a supplier’s attended may still end DISPUTED. null when it moves nothing."
                         },
                         "ifNotAttended": {
                           "type": "object",
@@ -3815,7 +3815,7 @@
                             }
                           },
                           "required": ["settlesTo", "consequences"],
-                          "description": "What filing `attended: false` would do to the booking now; null when it settles nothing."
+                          "description": "What filing `attended: false` would do now, judged from the booking alone. null when it moves nothing."
                         },
                         "report": {
                           "type": "object",
@@ -3893,7 +3893,7 @@
         ],
         "tags": ["Supplier plane"],
         "summary": "File the signed-in supplier’s attendance report on one of their bookings",
-        "description": "A self-report: `attended` says whether the SUPPLIER showed up, and settles the booking exactly as filing from the dashboard does — attended → COMPLETED, did not attend → SUPPLIER_NO_SHOW. 201 when filed, 200 when the identical answer was already on file, 409 `REPORT_ALREADY_EXISTS` for a different answer on file, 409 `BOOKING_ALREADY_SETTLED` on a booking already settled, 422 `BOOKING_NOT_REPORTABLE` when the booking is cancelled or has not ended yet. Requires the API key and the supplier’s user token.",
+        "description": "A self-report: `attended` says whether the SUPPLIER showed up, and settles the booking exactly as filing from the dashboard does — attended → COMPLETED (or DISPUTED, when the client has reported that they did not attend), did not attend → SUPPLIER_NO_SHOW. 201 when filed, 200 when the identical answer was already on file, 409 `REPORT_ALREADY_EXISTS` for a different answer on file, 409 `BOOKING_ALREADY_SETTLED` on a booking already settled, 422 `BOOKING_NOT_REPORTABLE` when the booking is cancelled or has not ended yet. Requires the API key and the supplier’s user token.",
         "parameters": [
           {
             "schema": {
@@ -3990,7 +3990,7 @@
                             }
                           },
                           "required": ["settlesTo", "consequences"],
-                          "description": "What filing `attended: true` would do to the booking now; null when it settles nothing."
+                          "description": "What filing `attended: true` would do now, judged from the booking alone; the other party’s report is never read, so a supplier’s attended may still end DISPUTED. null when it moves nothing."
                         },
                         "ifNotAttended": {
                           "type": "object",
@@ -4017,7 +4017,7 @@
                             }
                           },
                           "required": ["settlesTo", "consequences"],
-                          "description": "What filing `attended: false` would do to the booking now; null when it settles nothing."
+                          "description": "What filing `attended: false` would do now, judged from the booking alone. null when it moves nothing."
                         },
                         "report": {
                           "type": "object",
@@ -4098,7 +4098,7 @@
                             }
                           },
                           "required": ["settlesTo", "consequences"],
-                          "description": "What filing `attended: true` would do to the booking now; null when it settles nothing."
+                          "description": "What filing `attended: true` would do now, judged from the booking alone; the other party’s report is never read, so a supplier’s attended may still end DISPUTED. null when it moves nothing."
                         },
                         "ifNotAttended": {
                           "type": "object",
@@ -4125,7 +4125,7 @@
                             }
                           },
                           "required": ["settlesTo", "consequences"],
-                          "description": "What filing `attended: false` would do to the booking now; null when it settles nothing."
+                          "description": "What filing `attended: false` would do now, judged from the booking alone. null when it moves nothing."
                         },
                         "report": {
                           "type": "object",
@@ -4933,7 +4933,7 @@
             }
           },
           "409": {
-            "description": "Schedule overlaps an existing one",
+            "description": "CONFLICT: the schedule overlaps an existing active one",
             "content": {
               "application/json": {
                 "schema": {
@@ -6133,7 +6133,7 @@
             }
           },
           "409": {
-            "description": "Version conflict or overlap",
+            "description": "VERSION_CONFLICT: the row changed since you read it; CONFLICT: it overlaps an active schedule",
             "content": {
               "application/json": {
                 "schema": {
@@ -6206,6 +6206,16 @@
           },
           "404": {
             "description": "The signed-in user is not a supplier in this project, or no such schedule of theirs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "VERSION_CONFLICT: the row changed since you read it",
             "content": {
               "application/json": {
                 "schema": {
@@ -7788,7 +7798,7 @@
             }
           },
           "409": {
-            "description": "Version conflict",
+            "description": "VERSION_CONFLICT: the row changed since you read it",
             "content": {
               "application/json": {
                 "schema": {
@@ -7861,6 +7871,16 @@
           },
           "404": {
             "description": "The signed-in user is not a supplier in this project, or no such blocked time of theirs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "VERSION_CONFLICT: the row changed since you read it",
             "content": {
               "application/json": {
                 "schema": {
@@ -9871,7 +9891,7 @@
         ],
         "tags": ["Supplier plane"],
         "summary": "The signed-in supplier’s own profile",
-        "description": "The supplier record the user token resolves to in this project, as the MarketBox dashboard shows it under My Profile, built by the same code. It includes the fields the public `GET /suppliers/{supplierId}` omits: phone, email, address, `active`, time zone, service and skill ids, languages and locales. `avatarUrl` is the display-size photo, or null when none is set. Requires the API key and the supplier’s user token.",
+        "description": "The supplier record the user token resolves to in this project, as the MarketBox dashboard shows it under My Profile, built by the same code. It is the supplier’s own record, resolved from the user token: phone, email, address, `active`, time zone, service and skill ids, languages and locales. `GET /suppliers/{supplierId}` is an API-key route that also returns contact fields, so do not proxy it to browsers unfiltered. `avatarUrl` is the display-size photo, or null when none is set. Requires the API key and the supplier’s user token.",
         "parameters": [
           {
             "schema": {
@@ -12355,7 +12375,7 @@
             }
           },
           "409": {
-            "description": "Version conflict",
+            "description": "VERSION_CONFLICT: the row changed since you read it",
             "content": {
               "application/json": {
                 "schema": {
@@ -12437,7 +12457,7 @@
             }
           },
           "409": {
-            "description": "Version conflict",
+            "description": "VERSION_CONFLICT: the row changed since you read it",
             "content": {
               "application/json": {
                 "schema": {
@@ -13473,7 +13493,7 @@
                     "type": "string",
                     "minLength": 1,
                     "description": "The client this booking is for.",
-                    "example": "clt_dolphin_web"
+                    "example": "cli_01kv8p20m1gnqvxl92xln6awk8"
                   },
                   "bookingStartUtc": {
                     "type": "string",
@@ -13689,7 +13709,7 @@
             }
           },
           "400": {
-            "description": "Validation error, or an order-item pre-check failed: INVALID_ORDER_REFERENCE, INVALID_ORDER_ITEM_REFERENCE, ORDER_ITEM_SERVICE_MISMATCH, ORDER_ITEM_BUSINESS_MODEL_MISMATCH (the line names a businessModelType the sku of the order item is not sold as), ORDER_ITEM_QUANTITY_UNAVAILABLE",
+            "description": "Validation error, or an order-item pre-check failed: INVALID_ORDER_REFERENCE, INVALID_ORDER_ITEM_REFERENCE, ORDER_ITEM_SERVICE_MISMATCH, ORDER_ITEM_BUSINESS_MODEL_MISMATCH (the line names a businessModelType the sku of the order item is not sold as), ORDER_ITEM_QUANTITY_UNAVAILABLE. Also 400 when the location is of the wrong type or another supplier’s, or its fields are invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -13719,7 +13739,7 @@
             }
           },
           "404": {
-            "description": "Client, supplier, offering or project not found",
+            "description": "Client, supplier, offering, location or project not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -13729,7 +13749,7 @@
             }
           },
           "409": {
-            "description": "Supplier time is held or already booked, or the order is cancelled (code: ORDER_CANCELLED)",
+            "description": "Supplier time is held or already booked (SLOT_HELD / SLOT_BOOKED), the calendar is under contention (OCCUPANCY_CONTENTION), or the order is cancelled (code: ORDER_CANCELLED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13829,6 +13849,16 @@
                       ]
                     }
                   ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The booking location is a PHYSICAL Location without coordinates (UNPROCESSABLE_ENTITY): the business’s location data needs fixing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
                 }
               }
             }
@@ -14144,7 +14174,7 @@
             }
           },
           "400": {
-            "description": "Validation error",
+            "description": "Validation error, or a location change the booking cannot take",
             "content": {
               "application/json": {
                 "schema": {
@@ -14174,7 +14204,7 @@
             }
           },
           "404": {
-            "description": "Booking or supplier not found",
+            "description": "Booking, supplier or location not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -14184,7 +14214,112 @@
             }
           },
           "409": {
-            "description": "Version conflict",
+            "description": "The booking changed underneath you (VERSION_CONFLICT), or the new time or supplier is taken (SLOT_HELD / SLOT_BOOKED), or the calendar is under contention (OCCUPANCY_CONTENTION)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorMessage"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": ["SLOT_HELD", "SLOT_BOOKED"],
+                          "description": "Which kind of claim is blocking the requested time.",
+                          "example": "SLOT_HELD"
+                        },
+                        "message": {
+                          "type": "string",
+                          "description": "Human-readable summary of the conflict.",
+                          "example": "Supplier time is not available: HOLD resv_01kv8p20m1gnqvxl92xln6awk8 (2026-08-01T10:00:00Z–2026-08-01T11:00:00Z)"
+                        },
+                        "statusCode": {
+                          "type": "number",
+                          "enum": [409],
+                          "description": "The HTTP status, repeated in the body — every MarketBox error carries it, so you can branch on the body alone.",
+                          "example": 409
+                        },
+                        "requestId": {
+                          "type": "string",
+                          "description": "The id of this request (also returned as the X-Request-Id header). Quote it in a support ticket.",
+                          "example": "a3f1c2de-9b64-4a2f-8f0e-5c9d1b7a2e10"
+                        },
+                        "conflicts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "claimType": {
+                                "type": "string",
+                                "enum": ["BOOKING", "HOLD"],
+                                "description": "Whether the blocking claim is a HOLD or a confirmed BOOKING."
+                              },
+                              "supplierId": {
+                                "type": "string",
+                                "nullable": true,
+                                "description": "The supplier whose calendar is blocked, when known."
+                              },
+                              "startUtc": {
+                                "type": "string",
+                                "format": "date-time",
+                                "description": "Start of the blocking claim, UTC ISO 8601.",
+                                "example": "2026-08-01T10:00:00Z"
+                              },
+                              "endUtc": {
+                                "type": "string",
+                                "format": "date-time",
+                                "description": "End of the blocking claim, UTC ISO 8601.",
+                                "example": "2026-08-01T11:00:00Z"
+                              },
+                              "reservationId": {
+                                "type": "string",
+                                "nullable": true,
+                                "description": "Present when claimType is HOLD — the reservationId to convert or release. Null for a BOOKING conflict.",
+                                "example": "resv_01kv8p20m1gnqvxl92xln6awk8"
+                              },
+                              "bookingId": {
+                                "type": "string",
+                                "nullable": true,
+                                "description": "Present when claimType is BOOKING — the id of the confirmed booking occupying this time. Null for a HOLD conflict.",
+                                "example": null
+                              },
+                              "heldUntil": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "date-time",
+                                "description": "HOLD only: when the blocking hold lazily expires. Null for a BOOKING conflict.",
+                                "example": "2026-08-01T10:05:00Z"
+                              }
+                            },
+                            "required": ["claimType", "startUtc", "endUtc"]
+                          },
+                          "description": "Every live claim that overlaps the requested time — usually one, but can be more."
+                        },
+                        "hint": {
+                          "type": "string",
+                          "description": "What to do next: for SLOT_HELD, convert or release the named reservationId (POST .../holds/{reservationId}/convert or /release); for SLOT_BOOKED, search availability again.",
+                          "example": "This time is held (reservation resv_01kv8p20m1gnqvxl92xln6awk8). Convert the hold via POST /v1/projects/{projectId}/holds/{reservationId}/convert, or release it with POST /v1/projects/{projectId}/holds/{reservationId}/release. Direct booking routes will not consume a hold — if you hold, you convert."
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "statusCode",
+                        "requestId",
+                        "conflicts",
+                        "hint"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The booking location is a PHYSICAL Location without coordinates (UNPROCESSABLE_ENTITY): the business’s location data needs fixing",
             "content": {
               "application/json": {
                 "schema": {
@@ -14814,7 +14949,8 @@
                   },
                   "cancellationReason": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "description": "Required when status is CANCELLED; omitting it then is a 400. Why the booking was cancelled."
                   },
                   "creditTreatment": {
                     "type": "string",
@@ -17087,7 +17223,7 @@
                     "type": "string",
                     "minLength": 1,
                     "description": "The client placing the order.",
-                    "example": "clt_dolphin_web"
+                    "example": "cli_01kv8p20m1gnqvxl92xln6awk8"
                   },
                   "currency": {
                     "type": "string",
@@ -17430,7 +17566,7 @@
                                   "taxable"
                                 ]
                               },
-                              "description": "Service fees levied by the business models on this order. Each is a discrete charge in its own right, NOT folded into `taxTotal` or `subtotal`. Applied once per fee however many lines it governs."
+                              "description": "Service fees levied by the business models on this order. Each is a discrete charge in its own right. The fee amounts are NOT in `subtotal` or `taxTotal`, but tax charged on a fee IS added to `taxTotal`. Applied once per fee however many lines it governs."
                             },
                             "feeTotal": {
                               "type": "object",
@@ -18192,7 +18328,7 @@
                                   "taxable"
                                 ]
                               },
-                              "description": "Service fees levied by the business models on this order. Each is a discrete charge in its own right, NOT folded into `taxTotal` or `subtotal`. Applied once per fee however many lines it governs."
+                              "description": "Service fees levied by the business models on this order. Each is a discrete charge in its own right. The fee amounts are NOT in `subtotal` or `taxTotal`, but tax charged on a fee IS added to `taxTotal`. Applied once per fee however many lines it governs."
                             },
                             "feeTotal": {
                               "type": "object",
@@ -18441,7 +18577,8 @@
                   },
                   "cancellationReason": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "description": "Required when status is CANCELLED; omitting it then is a 400. Why the order was cancelled."
                   }
                 },
                 "required": ["status"]
@@ -18767,7 +18904,7 @@
                                   "taxable"
                                 ]
                               },
-                              "description": "Service fees levied by the business models on this order. Each is a discrete charge in its own right, NOT folded into `taxTotal` or `subtotal`. Applied once per fee however many lines it governs."
+                              "description": "Service fees levied by the business models on this order. Each is a discrete charge in its own right. The fee amounts are NOT in `subtotal` or `taxTotal`, but tax charged on a fee IS added to `taxTotal`. Applied once per fee however many lines it governs."
                             },
                             "feeTotal": {
                               "type": "object",
@@ -19117,7 +19254,7 @@
                                   "taxable"
                                 ]
                               },
-                              "description": "Service fees levied by the business models on this order. Each is a discrete charge in its own right, NOT folded into `taxTotal` or `subtotal`. Applied once per fee however many lines it governs."
+                              "description": "Service fees levied by the business models on this order. Each is a discrete charge in its own right. The fee amounts are NOT in `subtotal` or `taxTotal`, but tax charged on a fee IS added to `taxTotal`. Applied once per fee however many lines it governs."
                             },
                             "feeTotal": {
                               "type": "object",
@@ -19221,7 +19358,7 @@
       "delete": {
         "tags": ["Orders"],
         "summary": "Remove an order item",
-        "description": "Drops the line and returns the order with its recalculated totals. Removing a PACKAGE line does not retract bookings already drawn from it, so check `GET /orders/{orderId}/items/{orderItemId}/package-bookings` before removing one that has been booked against.",
+        "description": "Drops the line and returns the order with its recalculated totals. Removing a PACKAGE line does not retract bookings already drawn from it, so check `GET /orders/{orderId}/package-bookings?orderItemId=` before removing one that has been booked against.",
         "parameters": [
           {
             "schema": {
@@ -19437,7 +19574,7 @@
                                   "taxable"
                                 ]
                               },
-                              "description": "Service fees levied by the business models on this order. Each is a discrete charge in its own right, NOT folded into `taxTotal` or `subtotal`. Applied once per fee however many lines it governs."
+                              "description": "Service fees levied by the business models on this order. Each is a discrete charge in its own right. The fee amounts are NOT in `subtotal` or `taxTotal`, but tax charged on a fee IS added to `taxTotal`. Applied once per fee however many lines it governs."
                             },
                             "feeTotal": {
                               "type": "object",
@@ -19790,7 +19927,7 @@
             }
           },
           "400": {
-            "description": "Validation error, a session for another service/offering, or more sessions than remain",
+            "description": "Validation error, a session for another service/offering, more sessions than remain, or a location of the wrong type / another supplier’s / with invalid fields",
             "content": {
               "application/json": {
                 "schema": {
@@ -19820,7 +19957,7 @@
             }
           },
           "404": {
-            "description": "Order / item / offering / supplier not found",
+            "description": "Order / item / offering / supplier / location not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -19830,7 +19967,7 @@
             }
           },
           "409": {
-            "description": "PACKAGE_EXPIRED, ORDER_CANCELLED (a cancelled order), ORDER_ITEM_QUANTITY_UNAVAILABLE (a concurrent booking used the credits first), IDEMPOTENCY_KEY_CONFLICT, SLOT_HELD/SLOT_BOOKED (supplier time held/booked), or the slate/slot went stale (freshSuggestions returned)",
+            "description": "PACKAGE_EXPIRED, ORDER_CANCELLED (a cancelled order), ORDER_ITEM_QUANTITY_UNAVAILABLE (a concurrent booking used the credits first), IDEMPOTENCY_KEY_CONFLICT, SLOT_HELD/SLOT_BOOKED (supplier time held/booked), OCCUPANCY_CONTENTION (the calendar is under contention), or the slate/slot went stale (freshSuggestions returned)",
             "content": {
               "application/json": {
                 "schema": {
@@ -23156,7 +23293,7 @@
             }
           },
           "422": {
-            "description": "Slate too large, or best-effort not enabled",
+            "description": "Slate too large, best-effort not enabled, or a PHYSICAL location without coordinates (UNPROCESSABLE_ENTITY)",
             "content": {
               "application/json": {
                 "schema": {
@@ -40068,7 +40205,7 @@
       "post": {
         "tags": ["Holds"],
         "summary": "Convert a hold into confirmed bookings (the idempotent purchase hook)",
-        "description": "Turns the held supplier time into real bookings, drawing credits from the given order item. The order item's skuType decides what is booked: a PACKAGE item books every held interval as package sessions; a SINGLE_SESSION item books the ONE held interval as an ordinary single booking — no package, and no 1-credit \"reservation vehicle\" package needed. (A SINGLE_SESSION item against a hold covering more than one interval returns 409 RESERVATION_MULTI_INTERVAL; any other skuType returns 400.) Call it from your payment webhook: it is idempotent on the reservationId (the package booking write uses the deterministic key convert:\u003CreservationId\u003E), so a webhook firing twice replays the same bookings rather than double-booking, and a reservation already CONVERTED replays its stored result. The bookings are rebuilt from the RESERVATION and the ORDER ITEM — never by re-resolving a suggestion that may have expired — so the booked service and the credit it draws down cannot disagree. Returns 409 HOLD_EXPIRED if you converted too late (the hold no longer blocks anyone), or SLOT_HELD/SLOT_BOOKED if someone else took the time in the meantime. The order need not be paid, but a CANCELLED order converts nothing (409 ORDER_CANCELLED), not even as a replay: its cascade has released its credits and cancelled what it had booked. This response is NOT wrapped in a { data } envelope, and created[].sessionIndex is 0-based.",
+        "description": "Turns the held supplier time into real bookings, drawing credits from the given order item. The order item's skuType decides what is booked: a PACKAGE item books every held interval as package sessions; a SINGLE_SESSION item books the ONE held interval as an ordinary single booking — no package, and no 1-credit \"reservation vehicle\" package needed. (A SINGLE_SESSION item against a hold covering more than one interval returns 409 RESERVATION_MULTI_INTERVAL; any other skuType returns 400.) Call it once your checkout has confirmed payment (poll `GET /orders/{orderId}` for `PAID`, or convert first: convert does not require a paid order). The open API sends no webhooks. It is idempotent on the reservationId (the package booking write uses the deterministic key convert:\u003CreservationId\u003E), so a retried call replays the same bookings rather than double-booking, and a reservation already CONVERTED replays its stored result. The bookings are rebuilt from the RESERVATION and the ORDER ITEM — never by re-resolving a suggestion that may have expired — so the booked service and the credit it draws down cannot disagree. Returns 409 HOLD_EXPIRED if you converted too late (the hold no longer blocks anyone), or SLOT_HELD/SLOT_BOOKED if someone else took the time in the meantime. The order need not be paid, but a CANCELLED order converts nothing (409 ORDER_CANCELLED), not even as a replay: its cascade has released its credits and cancelled what it had booked. This response is NOT wrapped in a { data } envelope, and created[].sessionIndex is 0-based.",
         "parameters": [
           {
             "schema": {
@@ -40214,7 +40351,7 @@
             }
           },
           "400": {
-            "description": "Validation error",
+            "description": "Validation error, or a location of the wrong type / another supplier’s, or with invalid fields",
             "content": {
               "application/json": {
                 "schema": {
@@ -40244,7 +40381,7 @@
             }
           },
           "404": {
-            "description": "Order / order item / offering not found",
+            "description": "Order / order item / offering / location not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -40254,7 +40391,7 @@
             }
           },
           "409": {
-            "description": "Hold expired / not yours / already released, the time is now taken, or the order is cancelled (code: ORDER_CANCELLED)",
+            "description": "Hold expired / not yours / already released, the time is now taken (SLOT_HELD / SLOT_BOOKED), the calendar is under contention (OCCUPANCY_CONTENTION), or the order is cancelled (code: ORDER_CANCELLED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -40381,6 +40518,16 @@
                       "required": ["code", "message", "statusCode", "requestId"]
                     }
                   ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The held location is a PHYSICAL Location without coordinates (UNPROCESSABLE_ENTITY)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
                 }
               }
             }
@@ -41059,7 +41206,7 @@
             }
           },
           "400": {
-            "description": "Validation error, a session for another service/offering, or more sessions than remain",
+            "description": "Validation error, a session for another service/offering, more sessions than remain, or a location of the wrong type / another supplier’s / with invalid fields",
             "content": {
               "application/json": {
                 "schema": {
@@ -41089,7 +41236,7 @@
             }
           },
           "404": {
-            "description": "No client profile for this project; the order is missing or another client's (one body); a slateId/slotId is unknown or not planned from this credit (one body); or the item / offering / supplier was not found",
+            "description": "No client profile for this project; the order is missing or another client's (one body); a slateId/slotId is unknown or not planned from this credit (one body); or the item / offering / supplier / location was not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -41099,7 +41246,7 @@
             }
           },
           "409": {
-            "description": "ORDER_CANCELLED (a cancelled order), CREDIT_NOT_BOOKABLE (not a credit GET /clients/me/credits returns), PACKAGE_EXPIRED, ORDER_ITEM_QUANTITY_UNAVAILABLE (a concurrent booking used the credits first), IDEMPOTENCY_KEY_CONFLICT, SLOT_HELD/SLOT_BOOKED, or the slate/slot went stale (freshSuggestions returned)",
+            "description": "ORDER_CANCELLED (a cancelled order), CREDIT_NOT_BOOKABLE (not a credit GET /clients/me/credits returns), PACKAGE_EXPIRED, ORDER_ITEM_QUANTITY_UNAVAILABLE (a concurrent booking used the credits first), IDEMPOTENCY_KEY_CONFLICT, SLOT_HELD/SLOT_BOOKED, OCCUPANCY_CONTENTION, or the slate/slot went stale (freshSuggestions returned)",
             "content": {
               "application/json": {
                 "schema": {
@@ -44425,7 +44572,7 @@
             }
           },
           "422": {
-            "description": "Slate too large, or best-effort not enabled",
+            "description": "Slate too large, best-effort not enabled, or a PHYSICAL location without coordinates (UNPROCESSABLE_ENTITY)",
             "content": {
               "application/json": {
                 "schema": {

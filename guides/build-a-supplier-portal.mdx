@@ -192,7 +192,10 @@ A supplier may change `firstName`, `lastName`, `phone`, the address fields,
 `timezone`, `bio`, `languages`, `serviceIds` and `skillIds`. `serviceIds` and
 `skillIds` replace the whole set when sent. Take every id from the pickers:
 `serviceIds` from `GET /services?status=LIVE`, and `skillIds` from
-`GET /skills`. Never type or invent an id.
+`GET /skills`. Never type or invent an id. An id the project doesn't have is
+refused before anything is written, with `400 BAD_REQUEST` naming it:
+"Unknown serviceId(s): srv_01kv60qg9w4c3n8t2p6x5y7zab". Only ids being added
+are checked, so keeping a service that was since deleted still saves.
 
 ```json
 // PATCH /v1/projects/{projectId}/suppliers/me
@@ -262,7 +265,8 @@ Booking notes and the client's own report are never returned.
 
 After the booking ends, `GET /bookings/{bookingId}/reports`. `reportable` says
 whether a report may be filed now. `ifAttended` and `ifNotAttended` say which
-status each answer would move the booking to.
+status each answer would move the booking to. They are judged from the booking
+alone, so an `ifAttended` of `COMPLETED` can still end `DISPUTED`.
 
 Then `POST /bookings/{bookingId}/reports`:
 
@@ -276,7 +280,12 @@ Then `POST /bookings/{bookingId}/reports`:
 
 `attended` says whether **the supplier** attended. Filing settles the booking
 as the dashboard does: attended → `COMPLETED`, not attended →
-`SUPPLIER_NO_SHOW`.
+`SUPPLIER_NO_SHOW`. Attended becomes `DISPUTED` instead when the client has
+already reported that they didn't attend. No read tells the supplier what the
+client said, and the report's response carries no booking status. To show
+the outcome, re-read the booking with `GET /bookings/{bookingId}` rather than
+predicting it. See
+[Attendance and disputes](/resources/bookings#attendance-and-disputes).
 
 | Status and `code` | What it means |
 | --- | --- |
@@ -343,6 +352,7 @@ A move changes the time only. The length, supplier, location and zone stay.
 | `409 BOOKING_NOT_SCHEDULED` | The booking is no longer `SCHEDULED` — already cancelled, completed and so on. |
 | `409 NOTICE_WINDOW_PASSED` | Too close to the start to change. |
 | `409 VERSION_CONFLICT` | The booking changed since you read it. Re-read and try again. |
+| `409 OCCUPANCY_CONTENTION` | Move only: the supplier's calendar is under heavy concurrent writes. Retry after a short backoff. |
 | `422 NEW_START_INSIDE_NOTICE_WINDOW` | Move only: the new time is itself inside the notice window. |
 | `409 SLOT_UNAVAILABLE` | Move only: the new time is outside working hours, in blocked time, or overlaps another booking or a hold. When the availability check finds the cause, the `message` names it — for example "That time is not available: it is during time the supplier has blocked off." Time a hold has taken, or a booking made a moment earlier, reads "That time is not available. Choose another." |
 | `409 SLOT_UNVERIFIABLE` | Move only: availability couldn't be checked, so nothing changed. |
@@ -459,10 +469,16 @@ Before a schedule is saved, the API checks it. Each check below that fails is a
   both.
 - Each venue and zone exists in the project, with the type you named.
 
-Two `409 CONFLICT` cases to handle:
+Two `409` cases to handle. Branch on `code`, because the status is the same:
 
-- An `ACTIVE` schedule may not overlap another `ACTIVE` one.
-- A stale `version` is refused. Re-read the row and try again.
+- `CONFLICT`: an `ACTIVE` schedule may not overlap another `ACTIVE` one.
+  Change the dates or hours.
+- `VERSION_CONFLICT`: the row changed since you read it, such as "Schedule
+  was modified by another writer". Re-read the row and try again. A `DELETE`
+  can also get it, when another write lands on the row at the same moment.
+
+Blocked time and travel zones answer a stale `version` the same way, with
+`409 VERSION_CONFLICT`.
 
 Deleting a schedule whose `travelZoneRef` names one of the supplier's own zones
 (`SUPPLIER_TRAVEL_ZONE`) soft-deletes that zone too.
@@ -554,9 +570,9 @@ A zone does nothing until a schedule names it in `travelZoneRef`. See
 [Set working hours](#set-working-hours).
 
 To change a zone, `PATCH` it with the changes and its current `version`. A stale
-`version` is `409 CONFLICT`: re-read the zone and try again. `DELETE` takes no
-`version`. Its `409 CONFLICT` means another write to the zone landed at the same
-moment: re-read the zone, then decide again.
+`version` is `409 VERSION_CONFLICT`: re-read the zone and try again. `DELETE`
+takes no `version`. Its `409 VERSION_CONFLICT` means another write to the zone
+landed at the same moment: re-read the zone, then decide again.
 
 **A geometry change moves your schedules' versions.** When the geometry changes,
 every schedule that uses the zone is recomputed and rewritten. The response

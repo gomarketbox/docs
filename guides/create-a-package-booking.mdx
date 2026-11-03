@@ -778,6 +778,10 @@ will not consume your own hold and returns `409 SLOT_HELD` naming the
 | `orderItemId` isn't a `PACKAGE` item | `NOT_A_PACKAGE_ITEM` | `400` | Pass the `orderItemId` of the `PACKAGE` item from Step 3, not a `SINGLE_SESSION` item. |
 | `orderId` doesn't exist, or belongs to another project | `INVALID_ORDER_REFERENCE` | `400` | Double-check the `orderId` came from a `POST /orders` call in the same project. |
 | `orderItemId` doesn't exist on that order | `NOT_FOUND` | `404` | Re-fetch the order aggregate — you may be reusing a stale id. |
+| A session's `locationId` names no Location or travel zone in this project | `NOT_FOUND` | `404` | Take the id from the slate, or from `GET /locations`. |
+| A session's location is the wrong type, or another supplier's travel zone | `BAD_REQUEST` | `400` | `message` names the id. Book from the slate, which carries the right location. |
+| A session's `PHYSICAL` Location has no coordinates | `UNPROCESSABLE_ENTITY` | `422` | The business fixes the Location. Don't retry. |
+| The package's offering has no `DEFAULT` price rule | `OFFERING_NOT_PRICED` | `422` | The business adds one. Don't retry. |
 | `package-slate` with neither `packageId` nor `orderId` + `orderItemId`, or with both | `VALIDATION_ERROR` | `400` | Send exactly one source. |
 | `package-slate` for a credit with no sessions left | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | `409` | Nothing to plan. The credit is used up. |
 | `package-slate` for a credit whose `expiresAt` has passed | `PACKAGE_EXPIRED` | `409` | Nothing can be planned on it. |

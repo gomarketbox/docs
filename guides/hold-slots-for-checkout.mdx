@@ -725,6 +725,9 @@ except `OCCUPANCY_CONTENTION` is worth retrying unchanged.
 | --- | --- | --- | --- |
 | `404` | `NOT_FOUND` — **`Location stz_… not found`** | The hold carried an `stz_` travel-zone id but `locationType: "PHYSICAL"` (or no `locationType`), so convert looked for it in Locations. | Re-hold with `locationType: "TRAVEL_ZONE"` + `latitude` + `longitude` + `address`, then convert the new `reservationId`. This is the classic broken in-home checkout — see the [travel-zone walkthrough](#a-travel-zone-checkout-end-to-end). |
 | `404` | `NOT_FOUND` | The `orderItemId` isn't on that order, or the item's offering no longer exists. | Re-read the order with `GET /orders/{orderId}/aggregate`. |
+| `400` | `BAD_REQUEST` | The held location is the wrong type, or a travel zone of another supplier. `message` names it. | Release the hold and hold again with the right `locationType` and id. |
+| `422` | `UNPROCESSABLE_ENTITY` — **`Location loc_… is missing latitude/longitude coordinates`** | The held `PHYSICAL` Location has no coordinates. | The business fixes the Location. Retrying won't help. |
+| `422` | `OFFERING_NOT_PRICED` | The item's offering has no `DEFAULT` price rule. | The business adds one. Retrying won't help. |
 | `400` | `INVALID_ORDER_REFERENCE` | The `orderId` doesn't exist in this project. | Create the order first — convert draws credits from its item. |
 | `409` | `ORDER_CANCELLED` | The order is `CANCELLED`. Its credits were released and its bookings cancelled. Refused even for a hold that already converted, since the bookings a replay would return are cancelled. | Don't retry. Release the hold, and create a new order if the client still wants the time. |
 | `400` | `MISSING_BOOKING_TZ` | The hold carried no `bookingTz` and none could be derived. | Only reachable on holds placed before `bookingTz` was required. Release and re-hold with `bookingTz`. |

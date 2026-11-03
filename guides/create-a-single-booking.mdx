@@ -360,6 +360,10 @@ for you on the single-booking path.
 | Order item has no quantity left to draw down | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | `400` | A `SINGLE_SESSION` item only funds one booking. Create a new order for another session. |
 | The order is `CANCELLED` | `ORDER_CANCELLED` | `409` | Its credits were released when it was cancelled. Don't retry; create a new order. `DRAFT`, `PENDING` and `PAID` orders book as before. |
 | Offering isn't `ACTIVE` | `BAD_REQUEST` | `400` | Only active offerings can be booked or ordered. |
+| The offering has no `DEFAULT` price rule, on order create or booking create | `OFFERING_NOT_PRICED` | `422` | The business adds a `DEFAULT` rule to the offering. Don't retry. |
+| `locationId` names no Location or travel zone in this project | `NOT_FOUND` | `404` | The message is `Booking location loc_… not found`. Take the id from `GET /locations` or the supplier's travel zone. |
+| The location is the wrong type for `locationType`, or another supplier's travel zone | `BAD_REQUEST` | `400` | `message` names the id and the type. Send a `loc_` id for `PHYSICAL` and the supplier's own `stz_` id for `TRAVEL_ZONE`. |
+| A `PHYSICAL` Location has no coordinates | `UNPROCESSABLE_ENTITY` | `422` | The business fixes the Location. Don't retry. |
 | Wrong location fields for `locationType` | `VALIDATION_ERROR` | `400` | Match the table above — e.g. sending `latitude` on a `PHYSICAL` booking, or omitting `address` on `TRAVEL_ZONE`. |
 | `bookingEndUtc` not after `bookingStartUtc` | `BAD_REQUEST` | `400` | Fix the time window and retry. |
 | The supplier's time is claimed by a live hold — very often **your own**, if you held it and then called this route instead of converting | `SLOT_HELD` | `409` | Take the first `conflicts[]` entry with `claimType: "HOLD"`, read its `reservationId`, and call `POST /holds/{reservationId}/convert` instead. If the hold isn't yours, `heldUntil` says when it lapses. See [Hold slots during checkout](/guides/hold-slots-for-checkout#handling-a-held-slot). |
