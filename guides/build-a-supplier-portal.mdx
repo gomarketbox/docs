@@ -300,6 +300,15 @@ predicting it. See
 | `409 BOOKING_ALREADY_SETTLED` | The booking is already settled. |
 | `422 BOOKING_NOT_REPORTABLE` | The booking is cancelled, or hasn't ended yet. |
 
+### Rate the client
+
+The supplier plane has no review route. To let a supplier rate a client, your
+server checks the booking is theirs with
+`GET /suppliers/me/bookings/{bookingId}`, then posts a `SUPPLIER_TO_CLIENT`
+review with the API key. Don't check with the API-key
+`GET /bookings/{bookingId}`: it returns any booking in the project. See
+[Collect reviews and show ratings](/guides/collect-reviews-and-show-ratings#check-the-reviewer-is-on-the-booking).
+
 ## Cancel and reschedule
 
 | Method | Path | Body |

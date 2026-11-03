@@ -32,8 +32,8 @@ Every path is relative to the project: `POST /clients/me` is
 | `POST` | `/clients/me/orders/{orderId}/package-bookings` | API key + user token | Book the client's own package sessions. |
 | `GET` | `/clients/{clientId}/bookings` | API key | The client's bookings. |
 | `GET` | `/clients/{clientId}/orders` | API key | The client's orders. |
-| `GET` | `/clients/{clientId}/reviews` | API key | The reviews the client wrote. See [Reviews](/resources/reviews). |
-| `GET` | `/clients/{clientId}/review-summary` | API key | The client's review summary. See [Reviews](/resources/reviews). |
+| `GET` | `/clients/{clientId}/reviews` | API key | The reviews suppliers wrote **about** the client. See [Reviews](/resources/reviews). |
+| `GET` | `/clients/{clientId}/review-summary` | API key | The client's average rating from suppliers, and the review count. See [Reviews](/resources/reviews). |
 
 Send the API key as `x-api-key` and the user token as
 `Authorization: Bearer <token>`. Both come from your server: see
