@@ -87,7 +87,8 @@ Deleting one is a `409`, and nothing changes:
 ```
 
 Cancel it with `POST .../orders/{orderId}/status` instead. An abandoned
-checkout whose order books nothing and took no money can still be deleted. A
+checkout whose order books nothing and took no money can still be deleted.
+See [Abandoned checkout](/guides/client-checkout-end-to-end#abandoned-checkout). A
 booking that reaches the order between that check and the delete is
 cancelled with it, and no one is emailed about it.
 

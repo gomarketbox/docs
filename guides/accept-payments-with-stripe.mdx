@@ -347,6 +347,10 @@ lost, delayed, or spoofed. The **order status** (driven by the webhook) is the
 source of truth for whether money moved.
 </Warning>
 
+A client who closes the tab before the poll ends still pays. Keep the
+`orderId` on your server and check the order again later. See
+[Tracking state without webhooks](/concepts/tracking-state-without-webhooks).
+
 ## Test it
 
 Use Stripe **test mode** and the standard test card:

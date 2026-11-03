@@ -1,0 +1,256 @@
+---
+title: Cancel or reschedule a booking
+description: Cancel a booking with or without returning its package session, move it to a new time, cancel a whole order, and know when to delete instead, from your server with an API key.
+---
+
+This guide covers changing a booking after it's made, from your server with
+the API key:
+
+- **Cancel** one booking, and decide what happens to its package session.
+- **Reschedule** it to another time or supplier.
+- **Cancel a whole order**, and every session it still has.
+- **Delete** a booking that was made by mistake.
+
+None of these moves money. **The public API has no refund endpoint.** A
+refund is made by the business in the MarketBox dashboard.
+
+<Warning>
+**A client can't cancel or reschedule through the client plane.** There is no
+`/clients/me` route for it. If your client account page offers either, your
+server makes the change with the API key, and your server is the only thing
+checking that the booking is the client's. Resolve the client from their
+token with `POST /clients/me`, read the booking, and refuse when its
+`clientId` isn't theirs. See
+[Show booking and order history](/guides/manage-a-client-account#show-booking-and-order-history).
+</Warning>
+
+Your API key acts for the business. The service's
+[participant settings](/concepts/booking-engine-model#participant-settings)
+don't restrict it: no notice window, no "clients may not cancel". When a
+client asks for a change in your app, apply the business's rules yourself
+before you call. Read them from `participantSettings.client` on
+`GET /services/{serviceId}`. `canRescheduleBookings` and
+`rescheduleNoticeHours` say whether, and until when, a client may move a
+session. Clients can't cancel in MarketBox's own flows, so offering it is your
+business's decision.
+
+A supplier changes their own bookings through the
+[supplier plane](/guides/build-a-supplier-portal#cancel-and-reschedule), where
+those settings do apply.
+
+## Cancel a booking
+
+```json
+// POST /v1/projects/{projectId}/bookings/{bookingId}/status
+{
+  "status": "CANCELLED",
+  "cancellationReason": "Client asked to cancel by phone",
+  "creditTreatment": "RETURN"
+}
+```
+
+The `200` returns the booking in `data`, `status: "CANCELLED"`. In the same
+write, MarketBox frees the supplier's time and settles the session the
+booking drew on. Then it emails the client, the supplier and the business's
+staff. Your `cancellationReason` stays on the booking and isn't in the email.
+
+- **`cancellationReason` is required.** Leave it out and nothing is
+  cancelled: `400 VALIDATION_ERROR`, `cancellationReason: cancellationReason
+  is required when status is CANCELLED`.
+- **`creditTreatment` is for package sessions only.**
+
+### What happens to the session
+
+| The booking drew on | Leave out `creditTreatment` | `RETURN` | `FORFEIT` |
+| --- | --- | --- | --- |
+| A `PACKAGE` order item | The session goes back on the package. | Same, stated explicitly. | The session stays spent, for example for a late cancellation. |
+| A `SINGLE_SESSION` order item | The session is closed. Nothing comes back. | Refused. | Refused. |
+
+A single session has no credit to return or forfeit, so naming one is refused,
+and nothing is cancelled:
+
+```json
+{
+  "code": "NO_SESSION_CREDIT",
+  "message": "This booking is not part of a package, so it has no session credit to return or forfeit",
+  "statusCode": 422,
+  "requestId": "2b8f4d1a-6c3e-4a97-b5d0-1e7a9c3f6b42"
+}
+```
+
+A returned session shows up in `quantityRemaining` on the client's credit,
+and in `quantityReturned`. See
+[Cancelling and the package credit](/resources/bookings#cancelling-and-the-package-credit).
+
+Cancelling refunds nothing, whether the session was a single session or a
+package session you returned or forfeited. If the client should get money
+back, the business refunds them in the dashboard.
+
+### When a booking can be cancelled
+
+| The booking is | Your key can cancel it |
+| --- | --- |
+| `SCHEDULED` or `STARTED` | Until `bookingEndUtc`. |
+| `AWAITING_CONFIRMATION` | Yes. |
+| `DISPUTED` | No. An operator resolves it in the MarketBox console. |
+| `COMPLETED`, `CLIENT_NO_SHOW`, `SUPPLIER_NO_SHOW` | No. |
+| `CANCELLED` | No. It's final. |
+
+Anything else is a `400` that names the booking's current status:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Cannot transition booking status from COMPLETED to CANCELLED",
+  "statusCode": 400,
+  "requestId": "7d3a9e2c-1f5b-4c68-a0e4-6b2d8f1c3a95"
+}
+```
+
+**There's a gap of up to an hour after a session ends.** A booking moves to
+`AWAITING_CONFIRMATION` in an hourly sweep, not at `bookingEndUtc`. Until the
+sweep reaches it, it still reads `SCHEDULED`, it's past its end, and a cancel
+is the `400` above, `from SCHEDULED to CANCELLED`. Wait for it to read
+`AWAITING_CONFIRMATION`, then cancel. See
+[Tracking state without webhooks](/concepts/tracking-state-without-webhooks#a-session-ends).
+
+`409 VERSION_CONFLICT` means something else changed the booking at the same
+moment, for example the supplier's own cancel, or an order cascade. Re-read
+the booking and decide again. If it's already `CANCELLED`, you're done.
+
+## Reschedule a booking
+
+`PATCH /bookings/{bookingId}` moves the time, the supplier, or both:
+
+```json
+// PATCH /v1/projects/{projectId}/bookings/{bookingId}
+{
+  "bookingStartUtc": "2026-07-16T14:00:00.000Z",
+  "bookingEndUtc": "2026-07-16T15:00:00.000Z"
+}
+```
+
+Send both ends: the booking doesn't keep its length for you. The `200`
+returns the booking, with its `bookingLocal*` fields worked out again in its
+`bookingTz`. MarketBox emails the client, the supplier and the business
+about the move. A reassigned booking also tells the previous supplier.
+
+You can also send `supplierId`, `bookingTz`, `capacity`, and for an in-home
+booking `latitude`, `longitude` and `address`. You can't change the
+`locationType` or the `locationId`, or the client. To move a session to
+another venue, cancel it and book a new one.
+
+<Warning>
+**A reschedule checks only that the supplier is free.** It refuses a time
+that overlaps another booking or a hold of that supplier. It doesn't check
+the supplier's working hours or blocked time, so a `PATCH` can put a session
+at 3 a.m., or on the supplier's day off.
+
+So find the new time with search first, and send only a slot it returned:
+`POST /availability/suppliers` with the booking's service, offering and
+location, and the supplier's entry in the results. See
+[Search suppliers by availability](/guides/search-suppliers-by-availability).
+</Warning>
+
+<Warning>
+**A reschedule doesn't check the booking's status either.** Read the booking
+first and move only a `SCHEDULED` one. Moving a cancelled or completed
+booking still emails everyone that it moved.
+</Warning>
+
+A reschedule doesn't touch the order: the price, the order item and the
+package session stay as they were.
+
+### When a reschedule is refused
+
+Nothing is written when:
+
+| Status | `code` | Meaning | What to do |
+| --- | --- | --- | --- |
+| `409` | `SLOT_BOOKED` | The supplier has another booking at the new time. `conflicts[0].bookingId` names it. | Offer another time. |
+| `409` | `SLOT_HELD` | Another checkout holds the new time. `conflicts[]` carries the `reservationId` and `heldUntil`. | Offer another time. |
+| `409` | `OCCUPANCY_CONTENTION` | The supplier's calendar is under heavy concurrent writes. | Retry the same request after a short backoff. |
+| `409` | `VERSION_CONFLICT` | The booking changed at the same moment. | Re-read the booking and decide again. |
+| `400` | `BAD_REQUEST` | `bookingEndUtc must be strictly after bookingStartUtc`, an invalid `bookingTz`, or a location change the booking can't take, such as clearing an in-home `address`. | Fix the request. |
+| `404` | `NOT_FOUND` | The booking or the new supplier doesn't exist in this project. | Check the ids. |
+
+The `409` bodies carry `conflicts[]` and a `hint`. See
+[The three supplier-time conflicts](/concepts/concurrency#the-three-supplier-time-conflicts).
+
+## Cancel a whole order
+
+To call off everything a client bought, cancel the order:
+
+```json
+// POST /v1/projects/{projectId}/orders/{orderId}/status
+{
+  "status": "CANCELLED",
+  "cancellationReason": "Client moved away"
+}
+```
+
+The order is `CANCELLED` when the call returns. Its bookings are cancelled a
+few seconds **later**, and their package sessions released. Only `SCHEDULED`
+and `STARTED` bookings whose session is still ahead are cancelled. Sessions
+that already happened are left alone. The client gets one email listing every
+cancelled session. See
+[A cancelled order's bookings](/concepts/tracking-state-without-webhooks#a-cancelled-orders-bookings).
+
+A `CANCELLED` order is final, and nothing more can be booked from it: every
+route that creates a booking answers `409 ORDER_CANCELLED`. Cancelling doesn't refund the
+order.
+
+## Cancel or delete?
+
+| | Cancel | Delete |
+| --- | --- | --- |
+| Use it for | A session that was genuinely called off. | A booking made by mistake. |
+| Call | `POST /bookings/{bookingId}/status` | `DELETE /bookings/{bookingId}` |
+| The booking afterwards | `CANCELLED`, and listed. | Gone from every list and from `GET`, `404`. Kept for audit. |
+| The session | Your `creditTreatment`, or the default. | Always the default: a package session goes back. |
+| Response | `200` with the booking. | `204`, no body. |
+
+Delete doesn't check the booking's status, so it can remove a session that has
+already been delivered, and return its package credit. Delete only bookings
+that shouldn't have existed. For anything that happened, or was called off,
+cancel.
+
+An order has the same pair. Delete an order only when it books nothing and
+took no money. Otherwise `DELETE /orders/{orderId}` is `409
+ORDER_NOT_DELETABLE`, and you cancel it instead. See
+[The order lifecycle](/resources/orders#the-order-lifecycle).
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/v1/projects/{projectId}/bookings/{bookingId}/status` | `POST` | Cancel, with `cancellationReason` and an optional `creditTreatment`. |
+| `/v1/projects/{projectId}/bookings/{bookingId}` | `PATCH` | Move the time or the supplier. |
+| `/v1/projects/{projectId}/bookings/{bookingId}` | `DELETE` | Remove a booking made in error. `204`. |
+| `/v1/projects/{projectId}/bookings/{bookingId}` | `GET` | Read the booking's `status` and `clientId` before you change it. |
+| `/v1/projects/{projectId}/orders/{orderId}/status` | `POST` | Cancel a whole order. Its bookings follow. |
+| `/v1/projects/{projectId}/availability/suppliers` | `POST` | Find a time the supplier can actually work. |
+| `/v1/projects/{projectId}/services/{serviceId}` | `GET` | Read `participantSettings` to apply the business's rules for clients. |
+
+All take the API key alone.
+
+### Errors and edge cases
+
+| Scenario | `code` | Status | Resolution |
+| --- | --- | --- | --- |
+| Cancel without `cancellationReason` | `VALIDATION_ERROR` | `400` | Send a reason. |
+| `creditTreatment` on a single session | `NO_SESSION_CREDIT` | `422` | Leave `creditTreatment` out. |
+| `creditTreatment` with a status other than `CANCELLED` | `VALIDATION_ERROR` | `400` | Send it only with `CANCELLED`. |
+| Cancelling a settled, disputed or cancelled booking | `BAD_REQUEST` | `400` | `message` names the current status. Nothing to do from the API. |
+| Cancelling a session that ended in the last hour | `BAD_REQUEST` | `400` | Wait until it reads `AWAITING_CONFIRMATION`, then cancel. |
+| The booking changed at the same moment | `VERSION_CONFLICT` | `409` | Re-read it and decide again. |
+| The new time overlaps another booking or a hold | `SLOT_BOOKED`, `SLOT_HELD` | `409` | Offer another time from search. |
+| The supplier's calendar is busy with concurrent writes | `OCCUPANCY_CONTENTION` | `409` | Retry after a short backoff. |
+| Booking from a cancelled order | `ORDER_CANCELLED` | `409` | Create a new order. |
+| Deleting an order that holds a booking or money | `ORDER_NOT_DELETABLE` | `409` | Cancel the order instead. |
+| The client wants their money back | — | — | The business refunds from the MarketBox dashboard. There's no refund endpoint. |
+
+See [Errors](/concepts/errors) for the envelope, and
+[Concurrency](/concepts/concurrency) for the `409`s.
