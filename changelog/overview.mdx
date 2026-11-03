@@ -3,6 +3,41 @@ title: "Changelog"
 description: "New features, updates, and fixes to the MarketBox API."
 ---
 
+<Update label="November 3, 2026" tags={["API"]}>
+
+## Clients can dispute attendance; booking writes answer 4xx instead of 500; stale availability versions are `VERSION_CONFLICT`
+
+A client's report that they didn't attend can now open a dispute. Booking writes that used to fail with `500 INTERNAL_ERROR` now return a code you can act on. A stale `version` on a supplier's schedule, blocked time or travel zone has its own code.
+
+**One breaking change, one behaviour change, the rest additive.** No field was removed or renamed.
+
+**Breaking**
+
+- **A stale availability `version` is `409 VERSION_CONFLICT`, not `409 CONFLICT`.** This covers `PATCH` on `…/suppliers/me/schedules/{scheduleId}`, `…/blocked-times/{blockedTimeId}` and `…/travel-zones/{travelZoneId}`, and another write landing during a `DELETE` of any of them. The status is still `409`. An overlapping `ACTIVE` schedule stays `409 CONFLICT`, so branch on `code`. See [Build a supplier portal](/guides/build-a-supplier-portal#set-working-hours).
+
+**Changed**
+
+- **A client's "didn't attend" can open a dispute.** A supplier report of `attended: true` makes the booking `DISPUTED`, not `COMPLETED`, when a client report already says `attended: false`. A client's `attended: false` within 24 hours of a booking becoming `COMPLETED` also makes it `DISPUTED`, whoever completed it. Client reports filed with your key count toward the first case only. Nothing settles a booking on a timer. See [Attendance and disputes](/resources/bookings#attendance-and-disputes).
+
+**Fixed**
+
+- **Booking writes return 4xx instead of 500.** `POST …/bookings`, `PATCH …/bookings/{bookingId}`, `POST …/holds/{reservationId}/convert` and both package-bookings routes now answer:
+  - `409 SLOT_HELD` / `SLOT_BOOKED` when a reschedule's new time is taken, with `conflicts[]` and `hint`;
+  - `409 OCCUPANCY_CONTENTION` when the supplier's calendar is under heavy writes;
+  - `409 VERSION_CONFLICT` when the booking changed since you read it;
+  - `404 NOT_FOUND` for an unknown location, and `400 BAD_REQUEST` for one of the wrong type or another supplier's travel zone;
+  - `422 UNPROCESSABLE_ENTITY` for a `PHYSICAL` Location without coordinates.
+- **Converting a `PHYSICAL` hold works.** It used to fail with a `500`.
+- **A supplier's move under calendar contention** (`PATCH …/suppliers/me/bookings/{bookingId}`) is `409 OCCUPANCY_CONTENTION`, not `500`.
+- **An offering with no `DEFAULT` price rule** is `422 OFFERING_NOT_PRICED` on every write that prices it, not `500`.
+- **`PATCH …/suppliers/me` refuses unknown `serviceIds` and `skillIds`** with `400 BAD_REQUEST` naming them, before anything is written. It used to save them.
+
+**New**
+
+- **`conflicts[].supplierId`** on `409 SLOT_HELD` / `SLOT_BOOKED`: the supplier whose calendar is blocked, `null` when unknown. It was in the schema but never sent.
+
+</Update>
+
 <Update label="October 26, 2026" tags={["API"]}>
 
 ## Package credits: plan from a credit, clients book their own, and cancelled orders book nothing; supplier alerts

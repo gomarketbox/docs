@@ -90,7 +90,8 @@ blocking `bookingId`.
       "endUtc": "2026-07-15T15:00:00.000Z",
       "reservationId": null,
       "bookingId": "bk_01k16f2a0e5x9jv6r0c1qs7pm",
-      "heldUntil": null
+      "heldUntil": null,
+      "supplierId": "sup_01kv60qge5eh59ap0gw0pqrrys"
     }
   ],
   "hint": "This supplier is already booked for the requested time. Search availability again."
@@ -189,8 +190,10 @@ has booked returns `SLOT_HELD` / `SLOT_BOOKED`, not `VERSION_CONFLICT`.
 | `POST /v1/projects/{projectId}/bookings` | Yes — `SLOT_BOOKED`, `SLOT_HELD`, or `OCCUPANCY_CONTENTION`. |
 | `POST /v1/projects/{projectId}/orders/{orderId}/package-bookings` | Yes — same three, plus stale-slot and credit conflicts. |
 | `POST /v1/projects/{projectId}/holds` | Yes — `SLOT_BOOKED` / `SLOT_HELD` when the time is already claimed by someone else, or `RESERVATION_NOT_FOUND` / `RESERVATION_NOT_HELD` / `RESERVATION_FORBIDDEN` when extending a hold with a `reservationId` that is unknown, no longer held, or not yours. |
-| `POST /v1/projects/{projectId}/holds/{reservationId}/convert` | Yes — `HOLD_EXPIRED`, or `SLOT_BOOKED` / `SLOT_HELD` if the time went while you were paying. |
-| `PATCH /v1/projects/{projectId}/bookings/{bookingId}` | Yes — `VERSION_CONFLICT`, or a supplier-time conflict on a reschedule. |
+| `POST /v1/projects/{projectId}/holds/{reservationId}/convert` | Yes — `HOLD_EXPIRED`, `SLOT_BOOKED` / `SLOT_HELD` if the time went while you were paying, or `OCCUPANCY_CONTENTION`. |
+| `PATCH /v1/projects/{projectId}/bookings/{bookingId}` | Yes — `VERSION_CONFLICT`, `SLOT_BOOKED` / `SLOT_HELD` on a reschedule (with `conflicts[]` and `hint`), or `OCCUPANCY_CONTENTION`. |
+| `PATCH /v1/projects/{projectId}/suppliers/me/bookings/{bookingId}` | Yes — `VERSION_CONFLICT`, `SLOT_UNAVAILABLE`, `OCCUPANCY_CONTENTION`, and the notice-window and status refusals. |
+| `PATCH` and `DELETE` on `.../suppliers/me/schedules/{scheduleId}`, `/blocked-times/{blockedTimeId}` and `/travel-zones/{travelZoneId}` | Yes — `VERSION_CONFLICT` for a stale `version`, or another write during a `DELETE`. A schedule overlap is `CONFLICT`. |
 | `POST /v1/projects/{projectId}/bookings/{bookingId}/status` | Yes — booking version moved. |
 | `DELETE /v1/projects/{projectId}/bookings/{bookingId}` | Yes — booking version moved. |
 | `PATCH /v1/projects/{projectId}/orders/{orderId}` | Yes — order version moved. |
@@ -220,6 +223,6 @@ proceed. Surface them to the user rather than looping.
 | `SLOT_HELD` | **No** — convert the named `reservationId`, or offer another slot. |
 | `SLOT_BOOKED` | **No** — the time is taken. Search again. |
 | `HOLD_EXPIRED` | **No** — hold again, then convert the new reservation. |
-| `CONFLICT` (booking at capacity, or duplicate participant) | **No** — surface to the user. |
+| `CONFLICT` (booking at capacity, duplicate participant, or overlapping schedule) | **No** — surface to the user. |
 
 See [Errors](/concepts/errors) for the full envelope and code list.
