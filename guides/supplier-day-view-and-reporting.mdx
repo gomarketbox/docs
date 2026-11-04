@@ -9,8 +9,9 @@ After a booking ends, they file an attendance report, and that report settles
 it.
 
 This guide builds both on the **supplier plane**. It builds on
-[Build a supplier portal](/guides/build-a-supplier-portal), which covers
-sign-in, the two credentials, and the refusals every supplier-plane route
+[Build a supplier portal](/guides/build-a-supplier-portal) and its
+[Sign-in and access](/guides/supplier-portal-sign-in-and-access) page, which
+covers sign-in, the two credentials, and the refusals every supplier-plane route
 shares. Paths are relative to `/v1/projects/{projectId}/suppliers/me`.
 
 ## The day view
@@ -146,7 +147,7 @@ It appears only when a notice window has closed.
 the read and the click, so the action can still be refused, with
 `409 NOTICE_WINDOW_PASSED`. Re-read the booking and redraw. For the requests
 and every refusal, see
-[Cancel and reschedule](/guides/build-a-supplier-portal#cancel-and-reschedule).
+[Cancel and reschedule](/guides/supplier-portal-bookings#cancel-and-reschedule).
 
 ### Keep the agenda current
 
@@ -161,7 +162,7 @@ cancelled, poll:
 - `GET /suppliers/me/bookings` for the window on screen, when the supplier
   opens or refreshes it.
 
-See [Alerts](/guides/build-a-supplier-portal#alerts) and
+See [Alerts](/guides/supplier-portal-insights-and-alerts#alerts) and
 [Tracking state without webhooks](/concepts/tracking-state-without-webhooks).
 
 ## After the booking ends

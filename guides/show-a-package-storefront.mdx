@@ -1,6 +1,6 @@
 ---
 title: Show a package storefront
-description: List a service's packages and render them as ready-to-book plans — one call for the catalog, one for the plans, no fan-out.
+description: Render every package of a service as a ready-to-book plan — one call returns each package, its pricing and its slate, with no fan-out.
 ---
 
 This guide covers **package discovery** — the screen a client sees before
@@ -22,18 +22,23 @@ attached server-side by your BFF — never in the browser.
 
 ## How it works
 
-A package storefront is three calls, always in this order:
+A package storefront is two calls, always in this order:
 
-1. **List the catalog.** `GET /services/{serviceId}/packages?status=ACTIVE`
-   returns every sellable bundle on the service, across all of its offerings —
-   the name, `creditCount`, and `pricing` you need to render a plan card.
-2. **Get bookable plans.** `POST /availability/package-options` takes the
-   same `serviceId` plus a location and plans **every** ACTIVE package in one
-   call — no client-side loop over packages. Each entry comes back with a
-   `status` and, when it's bookable, a ready-to-use `slateId`.
-3. **Book the one the client picks.** Hand that entry's `slateId` (and its
+1. **Get bookable plans.** `POST /availability/package-options` takes a
+   `serviceId` plus a location and plans **every** ACTIVE package in one
+   call — no client-side loop over packages. Each entry carries the
+   `package` itself (the name, `creditCount`, and `pricing` you need to
+   render a plan card) with a `status` and, when it's bookable, a
+   ready-to-use `slateId`.
+2. **Book the one the client picks.** Hand that entry's `slateId` (and its
    `package.packageId`) to the order + booking flow in
    [Create a package booking](/guides/create-a-package-booking).
+
+You don't need to list the packages first: `package-options` returns each
+package with its pricing. To list a service's packages without planning
+them, see
+[Create a package booking](/guides/create-a-package-booking#how-it-works),
+step 1.
 
 ```mermaid
 sequenceDiagram
@@ -41,123 +46,14 @@ sequenceDiagram
     participant BFF as Your BFF
     participant MB as MarketBox API
     B->>BFF: Show packages for a service
-    BFF->>MB: GET .../services/{serviceId}/packages?status=ACTIVE
-    MB-->>BFF: { data: [{ packageId, offeringId, creditCount, pricing }] }
-    BFF-->>B: Render plan cards (name, credits, price)
-    B->>BFF: Client opens the storefront tab
     BFF->>MB: POST .../availability/package-options { serviceId, location }
     MB-->>BFF: { data: [{ package, status, slateId, primarySlate }] }
-    BFF-->>B: Mark OK entries bookable; surface reason on the rest
+    BFF-->>B: Render plan cards; mark OK entries bookable, surface reason on the rest
     B->>BFF: Client picks a plan
     Note over BFF,MB: Continue with Create a package booking (order → package-bookings)
 ```
 
 <Steps>
-<Step title="List the packages">
-List every package on the service with
-`GET /services/{serviceId}/packages?status=ACTIVE`. This spans **all of the
-service's offerings**, so you can call it before the client has chosen an
-option, and each package carries its `offeringId` so you can join it against
-the offerings list you already hold.
-
-```ts
-// app/api/bff/packages/route.ts
-import { NextResponse } from 'next/server';
-
-export async function GET(request: Request) {
-  const serviceId = new URL(request.url).searchParams.get('serviceId')!;
-
-  const res = await fetch(
-    `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/services/${serviceId}/packages?status=ACTIVE`,
-    {
-      headers: {
-        'x-api-key': process.env.MARKETBOX_API_KEY!, // server-only
-      },
-    },
-  );
-
-  const body = await res.json().catch(() => ({}));
-  return NextResponse.json(body, { status: res.status });
-}
-```
-
-The standard list envelope, one entry per bundle (abridged to one package):
-
-```json
-{
-  "data": [
-    {
-      "packageId": "pkg_01kvr4cgb3esg8hxx32kwhre7g",
-      "serviceId": "srv_01kv60qg12e82acr78edfnjhvv",
-      "offeringId": "off_01kv60qge5eh59ap0gw0pqrrys",
-      "name": { "en": "10-Session Pack" },
-      "creditCount": 10,
-      "pricingModel": "FLAT",
-      "pricing": [
-        {
-          "ruleId": "r_9f2c1b04",
-          "scope": "DEFAULT",
-          "price": { "amount": 45000, "currency": "USD" }
-        },
-        {
-          "ruleId": "r_210b02de",
-          "scope": "COUNTRY",
-          "country": "CA",
-          "price": { "amount": 45000, "currency": "CAD" }
-        }
-      ],
-      "status": "ACTIVE"
-    }
-  ],
-  "nextCursor": null
-}
-```
-
-<Note>
-**`pricing[]` is the full rule set, not one number.** Every package (and
-offering) carries a `DEFAULT` rule plus zero or more regional overrides
-(`COUNTRY` / `STATE` / `POSTAL`) — a rule set with no `DEFAULT` is invalid,
-so it's always there. The storefront's job is to pick **one** entry to
-*display*, based on where you already know (or guess) the client is
-booking from; the order-create call later must pass a matching region
-source (`reservationId`, `locationId`, or `address`) so the **server**
-resolves that same rule. Show the `COUNTRY/CA` price and then create the
-order with no region fields, and the order will price off the client's
-default saved address instead — or off `DEFAULT` when the client has no
-saved address. Either may be a different currency than what you
-displayed. See
-[Regional pricing](/concepts/regional-pricing) for the full resolution
-rule and how to keep display and order-create in agreement.
-</Note>
-
-Join each package's `offeringId` against the offerings you already hold to
-build the card label — e.g. `pkg.offeringId` → `offering.name` gives you
-"10-Session Pack · Beginner 30 minutes · $450 CAD" from `name`, the joined
-offering name, and the entry of `pricing[]` matching the client's known or
-selected region (falling back to the `DEFAULT` entry when you don't know it
-yet).
-
-<Warning>
-**Don't list business models and render them as packages.** The
-`PACKAGE` **business model** returned by
-`GET /services/{serviceId}/business-models` is only a flag on the service
-meaning "this service *can* be sold as packages." It is **not** a sellable
-bundle, and it carries **no `creditCount` and no `pricing`** — those fields
-live only on the packages this endpoint returns. Reading the business-models
-list and rendering each row as a package gives you one package-shaped object
-with a null session count and a null price, and a storefront that renders
-nothing. The packages are here; the business model just permits them.
-</Warning>
-
-<Note>
-**A service with no packages is a `200` with `data: []`, not an error** —
-hide the packages tab, don't branch on a status code. An **unknown**
-`serviceId` is a `404`, so a typo can never masquerade as "this service sells
-no packages." Valid `status` values are `DRAFT`, `ACTIVE`, and `ARCHIVED` —
-there is no `INACTIVE`.
-</Note>
-</Step>
-
 <Step title="Get bookable plans">
 Plan every ACTIVE package in one call with
 `POST /availability/package-options` — send the `serviceId` and a location
@@ -268,7 +164,7 @@ unplannable one):
 this endpoint's whole appeal is not sending an `rrule` per package, and
 without one there's no requested cadence for the plan to be scored against.
 `matchScore` is `1`, the mean of the one component present. See
-[How well a slate matches](/guides/availability-and-slates#how-well-a-slate-matches-matchscore-and-matchcomponents)
+[How well a slate matches](/resources/suggestions#how-well-a-slate-matches-matchscore-and-matchcomponents)
 for the full breakdown.
 
 <Note>
@@ -281,6 +177,49 @@ look-ahead ceiling) instead of hiding them silently. A weekly 10-session
 package (~70 days) comfortably fits the ceiling and comes back `OK`; a
 weekly 20-session package (~134 days) does not.
 </Note>
+
+<Note>
+**A service with no ACTIVE packages is a `200` with `data: []`, not an
+error** — hide the packages tab, don't branch on a status code. An
+**unknown** `serviceId` is a `404`, so a typo can never masquerade as "this
+service sells no packages."
+</Note>
+
+<Note>
+**`pricing[]` is the full rule set, not one number.** Every package (and
+offering) carries a `DEFAULT` rule plus zero or more regional overrides
+(`COUNTRY` / `STATE` / `POSTAL`) — a rule set with no `DEFAULT` is invalid,
+so it's always there. The storefront's job is to pick **one** entry to
+*display*, based on where you already know (or guess) the client is
+booking from; the order-create call later must pass a matching region
+source (`reservationId`, `locationId`, or `address`) so the **server**
+resolves that same rule. Show the `COUNTRY/CA` price and then create the
+order with no region fields, and the order will price off the client's
+default saved address instead — or off `DEFAULT` when the client has no
+saved address. Either may be a different currency than what you
+displayed. See
+[Regional pricing](/concepts/regional-pricing) for the full resolution
+rule and how to keep display and order-create in agreement.
+</Note>
+
+Join each entry's `package.offeringId` against the offerings you already hold to
+build the card label — e.g. `pkg.offeringId` → `offering.name` gives you
+"10-Session Pack · Beginner 30 minutes · $450 CAD" from `name`, the joined
+offering name, and the entry of `pricing[]` matching the client's known or
+selected region (falling back to the `DEFAULT` entry when you don't know it
+yet).
+
+<Warning>
+**Don't list business models and render them as packages.** The
+`PACKAGE` **business model** returned by
+`GET /services/{serviceId}/business-models` is only a flag on the service
+meaning "this service *can* be sold as packages." It is **not** a sellable
+bundle, and it carries **no `creditCount` and no `pricing`** — those fields
+live only on packages, such as the `package` in each entry here. Reading the business-models
+list and rendering each row as a package gives you one package-shaped object
+with a null session count and a null price, and a storefront that renders
+nothing. The packages are here; the business model just permits them.
+</Warning>
 
 This also replaces a client-side fan-out of one `package-slate` call per
 package: the engine reads each **offering's** supplier availability once,
@@ -311,8 +250,7 @@ two values.
 
 | Endpoint | Method | Auth | Description |
 | --- | --- | --- | --- |
-| `/v1/projects/{projectId}/services/{serviceId}/packages` | `GET` | `x-api-key` | List every package on the service, across all its offerings. `?status=ACTIVE` for the purchasable bundles. `200 []` when the service sells none; `404` for an unknown `serviceId`. Full reference: [Packages](/resources/packages). |
-| `/v1/projects/{projectId}/availability/package-options` | `POST` | `x-api-key` | Plan every ACTIVE package of a service in one call. Each entry carries `status`, `reason`, and — when bookable — a ready-to-use `slateId`. Always `200`; per-package failures never fail the request. |
+| `/v1/projects/{projectId}/availability/package-options` | `POST` | `x-api-key` | Plan every ACTIVE package of a service in one call. Each entry carries the `package`, its `status`, `reason`, and — when bookable — a ready-to-use `slateId`. `200` even when packages are unplannable; per-package failures never fail the request. `404` for an unknown `serviceId`. For the package object, see [Packages](/resources/packages). |
 
 ### Configuration
 
@@ -326,8 +264,8 @@ two values.
 
 | Scenario | `code` | Status | Resolution |
 | --- | --- | --- | --- |
-| The service exists but sells no packages | — | `200` | Not an error: `data` is `[]`. Hide the packages tab rather than branching on a status code. |
-| Unknown `serviceId` on the package list | `NOT_FOUND` | `404` | A typo never reads as "no packages" — check the id came from this project's service catalogue. |
+| The service exists but has no ACTIVE packages | — | `200` | Not an error: `data` is `[]`. Hide the packages tab rather than branching on a status code. |
+| Unknown `serviceId` | `NOT_FOUND` | `404` | A typo never reads as "no packages" — check the id came from this project's service catalogue. |
 | A package's derived (or explicit) cadence needs more than the 120-day look-ahead ceiling | `NO_COMPLETE_SLATE` | `200`, per entry | Not a request-level error — that entry's `status` is `NO_COMPLETE_SLATE` and `reason` names the window required. Render the other `OK` entries normally; see [Availability and slates](/guides/availability-and-slates#the-120-day-look-ahead-ceiling). |
 | No supplier availability at all for a package's location/window | `NO_AVAILABILITY` | `200`, per entry | Also per-entry, not a request failure. Try a different location or a later `lookAheadStartDate`. |
 | `lookAheadStartDate` has a `Z` suffix instead of a numeric offset | `VALIDATION_ERROR` | `400` | Use a numeric `±HH:MM` offset, e.g. `-04:00`. |

@@ -1,0 +1,78 @@
+---
+title: "Supplier portal: profile and photo"
+description: Let a signed-in supplier read and edit their own profile, pick their services and skills, and change their photo, on the supplier plane.
+---
+
+This page is part of [Build a supplier portal](/guides/build-a-supplier-portal).
+Every call takes your API key and the supplier's access token. See
+[Sign-in and access](/guides/supplier-portal-sign-in-and-access).
+
+Paths are relative to `/v1/projects/{projectId}/suppliers/me`.
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | (the base path) | The supplier's own profile. |
+| `PATCH` | (the base path) | Changes the fields a supplier may change. |
+| `POST` | `/avatar/upload-url` | Step 1 of a new photo: a short-lived upload URL. |
+| `PUT` | `/avatar` | Step 2: attaches the uploaded photo. |
+| `DELETE` | `/avatar` | Removes the photo. `204`, whether or not there was one. |
+
+The profile includes the fields the public
+`GET /v1/projects/{projectId}/suppliers/{supplierId}` leaves out: phone, email,
+address, `active`, timezone, service and skill ids, languages and locales.
+
+## Edit the profile
+
+1. `GET /suppliers/me` to fill the form. For the pickers, call
+   `GET /v1/projects/{projectId}/services?status=LIVE` and
+   [`GET /v1/projects/{projectId}/skills`](/resources/locations#skills) with the
+   API key alone. Without `status=LIVE`, the service list also holds `DRAFT`
+   and `INACTIVE` services, which aren't published to clients. See
+   [What the status controls](/resources/services#what-the-status-controls).
+2. `PATCH /suppliers/me` with only the fields that changed. `200` returns the
+   updated profile.
+
+A supplier may change `firstName`, `lastName`, `phone`, the address fields,
+`timezone`, `bio`, `languages`, `serviceIds` and `skillIds`. `serviceIds` and
+`skillIds` replace the whole set when sent. Take every id from the pickers:
+`serviceIds` from `GET /services?status=LIVE`, and `skillIds` from
+`GET /skills`. Never type or invent an id. An id the project doesn't have is
+refused before anything is written, with `400 BAD_REQUEST` naming it:
+"Unknown serviceId(s): srv_01kv60qg9w4c3n8t2p6x5y7zab". Only ids being added
+are checked, so keeping a service that was since deleted still saves.
+
+```json
+// PATCH /v1/projects/{projectId}/suppliers/me
+{
+  "bio": "Swim coach for adults and teens.",
+  "skillIds": ["skl_01kv60qg9w4c3n8t2p6x5y7zab"]
+}
+```
+
+**Fields only the business may change** are refused. A body that names
+`active`, `email`, `externalId`, `externalData`, `maxTravelTime` or
+`defaultLocale` is refused whole, whatever the value:
+
+```json
+{
+  "code": "FIELD_NOT_SELF_EDITABLE",
+  "message": "Only staff can change: active",
+  "statusCode": 403,
+  "requestId": "c2e8a4f1-6d3b-4e97-a05c-8b1f3d6e2a74"
+}
+```
+
+Any other field the schema doesn't list is a `400 VALIDATION_ERROR`.
+
+## Change the photo
+
+1. `POST /avatar/upload-url` with `contentType` (`image/jpeg`, `image/png` or
+   `image/webp`) and `contentLength` (the real size in bytes, at most 5 MB).
+2. `PUT` the image bytes to the returned `url` within 5 minutes. Send exactly
+   the returned `headers` and no others — an extra header fails the upload.
+3. `PUT /avatar` with a body of `uploadId` and `variantId`, exactly as step 1
+   returned them.
+
+The image is resized after it lands, so step 3 often answers
+`400 BAD_REQUEST` with "Avatar variant not ready yet. Retry shortly." That is a
+retry signal: wait a second or two and call again.

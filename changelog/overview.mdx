@@ -16,7 +16,7 @@ A client's report that they didn't attend can now open a dispute. Deleting an or
 - **A hold from an expired slate is refused.** `POST …/holds` with `slateId` or `slotIds` past its `resolvableUntil` now answers `409 SUGGESTION_EXPIRED`, "Slot … is past its resolvable window". This includes extending a hold. It used to succeed, holding times planned from availability that may have changed. Plan a fresh slate and hold that. Convert still doesn't re-check the window, so a client who takes a while to pay still books. See [Holds](/resources/holds).
 
 - **`DELETE …/orders/{orderId}` refuses a real order.** An order holding a booking (booked or delivered), or a `PENDING` or `SUCCEEDED` payment or refund, now answers `409 ORDER_NOT_DELETABLE` and nothing changes. Cancel it with `POST …/orders/{orderId}/status` instead. An order that books nothing and took no money still deletes. See [Orders](/resources/orders#the-order-lifecycle).
-- **A stale availability `version` is `409 VERSION_CONFLICT`, not `409 CONFLICT`.** This covers `PATCH` on `…/suppliers/me/schedules/{scheduleId}`, `…/blocked-times/{blockedTimeId}` and `…/travel-zones/{travelZoneId}`, and another write landing during a `DELETE` of any of them. The status is still `409`. An overlapping `ACTIVE` schedule stays `409 CONFLICT`, so branch on `code`. See [Build a supplier portal](/guides/build-a-supplier-portal#set-working-hours).
+- **A stale availability `version` is `409 VERSION_CONFLICT`, not `409 CONFLICT`.** This covers `PATCH` on `…/suppliers/me/schedules/{scheduleId}`, `…/blocked-times/{blockedTimeId}` and `…/travel-zones/{travelZoneId}`, and another write landing during a `DELETE` of any of them. The status is still `409`. An overlapping `ACTIVE` schedule stays `409 CONFLICT`, so branch on `code`. See [Supplier portal → Set working hours](/guides/supplier-portal-availability#set-working-hours).
 
 **Changed**
 
@@ -53,7 +53,7 @@ A client's report that they didn't attend can now open a dispute. Deleting an or
 - **Handle `DISPUTED` wherever you show a booking's status.** An operator resolves it in the MarketBox console; your key can't.
 - **Stop retrying booking writes that failed with a 500.** The same failures now arrive as a 4xx that says what to fix.
 
-Full detail: [Holds](/resources/holds), [Orders → The order lifecycle](/resources/orders#the-order-lifecycle), [Bookings → Attendance and disputes](/resources/bookings#attendance-and-disputes), [Bookings → Creating a booking](/resources/bookings#creating-a-booking), [Build a supplier portal → Set working hours](/guides/build-a-supplier-portal#set-working-hours), [Errors](/concepts/errors).
+Full detail: [Holds](/resources/holds), [Orders → The order lifecycle](/resources/orders#the-order-lifecycle), [Bookings → Attendance and disputes](/resources/bookings#attendance-and-disputes), [Bookings → Creating a booking](/resources/bookings#creating-a-booking), [Supplier portal → Set working hours](/guides/supplier-portal-availability#set-working-hours), [Errors](/concepts/errors).
 
 </Update>
 
@@ -92,7 +92,7 @@ You can now plan a slate from a credit the client already owns, and the signed-i
 - **Keep the same `idempotencyKey` when you retry a booking,** and a fresh one for each new attempt.
 - **Don't add `quantityReturned` to `quantityRemaining`.** It is already included.
 
-Full detail: [Create a package booking → What a booking call checks](/guides/create-a-package-booking#what-a-booking-call-checks), [Create a package booking → Book the sessions left on a credit](/guides/create-a-package-booking#book-the-sessions-left-on-a-credit), [Build a booking flow → Book a client's own credit](/guides/booking-flow-auth#book-a-clients-own-credit), [Build a supplier portal → Alerts](/guides/build-a-supplier-portal#alerts), [Build a supplier portal → Links in MarketBox emails](/guides/build-a-supplier-portal#links-in-marketbox-emails), [Errors → Package credit codes](/concepts/errors#package-credit-codes).
+Full detail: [Create a package booking → What a booking call checks](/guides/create-a-package-booking#what-a-booking-call-checks), [Create a package booking → Book the sessions left on a credit](/guides/create-a-package-booking#book-the-sessions-left-on-a-credit), [Book a client's package credit → What the booking call checks](/guides/book-a-package-credit#what-the-booking-call-checks), [Supplier portal → Alerts](/guides/supplier-portal-insights-and-alerts#alerts), [Supplier portal → Links in MarketBox emails](/guides/supplier-portal-sign-in-and-access#links-in-marketbox-emails), [Errors → Package credit codes](/concepts/errors#package-credit-codes).
 
 </Update>
 
@@ -392,7 +392,7 @@ A note carries no English at all. You keep your own copy and can localise it; `e
 - **`matchNotes` explains `matchComponents`, it doesn't replace it.** Read `matchComponents` for *which* criterion missed and `matchNotes` for *why*; `component` on each note points at the criterion it explains. `PACKAGE_UNDERFILLED` is the one code with no `component`, because plan size isn't a scored criterion. That pointer is a guide, not a join key: the week-level codes bucket **Monday-anchored calendar weeks** while `matchComponents.sessionsPerWeek` buckets **consecutive 7-day blocks from your window's start**, so a note can name a short week for a criterion the component scores as met, and the reverse. Join notes to `cadenceSummary.byWeek` on `weekStart`, which shares their bucketing.
 - Slates persisted before this release read back with `matchNotes: []` and no `advice`. Both are provenance — recorded when the slate was built, not re-derived on a rebuild.
 
-Full walkthrough, with both sides of the supplier-versus-filter pair side by side: [Availability and slates → Why a slate departs from your request](/guides/availability-and-slates#why-a-slate-departs-from-your-request-matchnotes).
+Full walkthrough, with both sides of the supplier-versus-filter pair side by side: [Suggestions → Why a slate departs from your request](/resources/suggestions#why-a-slate-departs-from-your-request-matchnotes).
 
 </Update>
 
@@ -459,7 +459,7 @@ The removed field was an average, and an average is the one number that describe
 - **Unlike its neighbours, `cadenceSummary` is not provenance.** `matchScore` and `matchComponents` are recorded once and never re-derived, but `peak`, `average` and `byWeek` recompute from the slate's current sessions on every rebuild; only `requested` is snapshotted. A slate can come back from a reschedule with an unchanged `matchScore` and a changed `cadenceSummary`.
 - Slates persisted before this release read back with `requested: null`; `peak`, `average` and `byWeek` are computed from their stored sessions, so they are correct.
 
-Full explanation, with the two week-bucketings side by side: [Availability and slates → How often a plan runs](/guides/availability-and-slates#how-often-a-plan-runs-cadencesummary).
+Full explanation, with the two week-bucketings side by side: [Suggestions → How often a plan runs](/resources/suggestions#how-often-a-plan-runs-cadencesummary).
 
 </Update>
 

@@ -3,6 +3,8 @@ title: Create a single booking
 description: Book one client into one session — create an order, find its order item, then create the booking that draws it down.
 ---
 
+import LocationRules from '/snippets/location-rules.mdx';
+
 This guide walks through the single-session booking flow end to end: create
 an order, read the order item it produced, then create the booking that
 consumes it. For a client checkout that also holds the time and takes
@@ -317,11 +319,7 @@ The booking response doesn't echo the service lines. Read them from
 **Location fields depend on `locationType`** — the API rejects the wrong
 combination with a `400`:
 
-| `locationType` | Required fields | Must be omitted |
-| --- | --- | --- |
-| `VIRTUAL` | none | `locationId`, `latitude`, `longitude` |
-| `PHYSICAL` | `locationId` (a Location id) | `latitude`, `longitude` (derived from the Location) |
-| `TRAVEL_ZONE` | `locationId` (the `supplierTravelZoneId`), `latitude`, `longitude`, and a structured `address` | — |
+<LocationRules />
 
 The `address` object (`addressOneLine`, `streetNumber`, `streetName`, `city`,
 `state`, `country` as ISO-2, `zipCode`, plus optional `unitNumber`) is

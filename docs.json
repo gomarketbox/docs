@@ -64,10 +64,20 @@
               "guides/manage-a-client-account",
               "guides/accept-payments-with-stripe",
               "guides/record-offline-payments",
-              "guides/build-a-supplier-portal",
-              "guides/supplier-day-view-and-reporting",
-              "guides/weekly-hours-exceptions-and-seasons",
-              "guides/set-up-a-mobile-supplier-service-area",
+              {
+                "group": "Build a supplier portal",
+                "pages": [
+                  "guides/build-a-supplier-portal",
+                  "guides/supplier-portal-sign-in-and-access",
+                  "guides/supplier-portal-profile-and-photo",
+                  "guides/supplier-portal-bookings",
+                  "guides/supplier-portal-availability",
+                  "guides/supplier-portal-insights-and-alerts",
+                  "guides/supplier-day-view-and-reporting",
+                  "guides/weekly-hours-exceptions-and-seasons",
+                  "guides/set-up-a-mobile-supplier-service-area"
+                ]
+              },
               "guides/report-site-events"
             ]
           },

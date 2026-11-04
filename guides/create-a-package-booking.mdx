@@ -170,6 +170,8 @@ The packages are here; the business model just permits them.
 **A service with no packages is a `200` with `data: []`, not an error** —
 hide the tab, don't branch on a status code. An **unknown** `serviceId` is a
 `404`, so a typo can never masquerade as "this service sells no packages."
+Valid `status` values are `DRAFT`, `ACTIVE`, and `ARCHIVED` — there is no
+`INACTIVE`.
 </Note>
 
 Take the `packageId` of the bundle the client picks into the next step.
@@ -285,7 +287,7 @@ at all in the window). See the Reference section below.
 
 `matchScore` is the mean of `matchComponents` — here `1`, since session one
 lands on the window's first day and the plan runs at exactly the requested
-cadence. See [How well a slate matches](/guides/availability-and-slates#how-well-a-slate-matches-matchscore-and-matchcomponents)
+cadence. See [How well a slate matches](/resources/suggestions#how-well-a-slate-matches-matchscore-and-matchcomponents)
 for the full breakdown and how ranking works.
 
 You only need `primarySlate.slateId` for the next steps — hold onto it.
@@ -651,7 +653,7 @@ A credit plans differently from a package:
   the item's `quantityRemaining`. A package replaces it with its
   `creditCount`.
 - **It plans the credit's own service and offering**, so the slate always
-  passes the [offering check](#every-session-books-the-credits-own-offering).
+  passes the [offering check](#every-session-books-the-credit’s-own-offering).
 - **The plan ends at the credit's `expiresAt`.** No slot starts at or after
   it. When the window comes from the cadence (no `lookAheadDays` or `endDate`)
   and you ask for no relaxation, a credit that expires before its sessions fit
@@ -741,7 +743,7 @@ will not consume your own hold and returns `409 SLOT_HELD` naming the
 | `/v1/projects/{projectId}/availability/package-slate` | `POST` | `x-api-key` | Build an N-session slate from one supplier, for a package (`packageId`) or for what is left on a credit (`orderId` + `orderItemId`). Returns `primarySlate.slateId`. `422` when nothing is bookable. |
 | `/v1/projects/{projectId}/orders` | `POST` | `x-api-key` | Create the order and its `PACKAGE` item. Order id nested at `data.order.orderId`; item at `data.items[]`. |
 | `/v1/projects/{projectId}/orders/{orderId}/package-bookings` | `POST` | `x-api-key` | Book all N sessions of the slate atomically (or best-effort). Response is **not** wrapped in `{ data }`. |
-| `/v1/projects/{projectId}/clients/me/orders/{orderId}/package-bookings` | `POST` | `x-api-key` + `Bearer` | The same booking, made by the signed-in client on their own credit. See [Book a client's own credit](/guides/booking-flow-auth#book-a-clients-own-credit). |
+| `/v1/projects/{projectId}/clients/me/orders/{orderId}/package-bookings` | `POST` | `x-api-key` + `Bearer` | The same booking, made by the signed-in client on their own credit. See [Book a client's package credit](/guides/book-a-package-credit). |
 
 ### Configuration
 
@@ -771,7 +773,7 @@ will not consume your own hold and returns `409 SLOT_HELD` naming the
 | Heavy concurrent writes on one supplier-day exhausted the internal retry | `OCCUPANCY_CONTENTION` | `409` | Transient — retry the same request after a short backoff. |
 | Same `idempotencyKey` reused with a different request body — even one that would be invalid on its own | `IDEMPOTENCY_KEY_CONFLICT` | `409` | Generate a fresh `idempotencyKey` per distinct booking attempt; reusing the same key with the same body safely replays the original `201`, even after the credits ran out. See [Retry safely](#retry-safely-with-idempotencykey). |
 | A session starts after the order item's `expiresAt` | `PACKAGE_EXPIRED` | `409` | No session can be booked past the expiry. `all_or_nothing` refuses the whole call; `best_effort` lists the session in `failed[]`. |
-| A session names a service or offering other than the order item's | `ORDER_ITEM_SERVICE_MISMATCH` | `400` | Book the item's own offering. Plan the slate from that package or from the credit. See [Every session books the credit's own offering](#every-session-books-the-credits-own-offering). |
+| A session names a service or offering other than the order item's | `ORDER_ITEM_SERVICE_MISMATCH` | `400` | Book the item's own offering. Plan the slate from that package or from the credit. See [Every session books the credit's own offering](#every-session-books-the-credit’s-own-offering). |
 | The order is `CANCELLED` | `ORDER_CANCELLED` | `409` | Its credits were released when it was cancelled. Don't retry; create a new order. Also returned by `package-slate` for a credit on that order. |
 | Requested more sessions than the order item has remaining | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | `400` | The up-front precheck rejects this. Check `quantityRemaining` before booking. |
 | A concurrent draw-down consumed the credits mid-transaction | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | `409` | A race with another booking exhausted the item after the precheck. Re-fetch `quantityRemaining` and retry with what's left. |

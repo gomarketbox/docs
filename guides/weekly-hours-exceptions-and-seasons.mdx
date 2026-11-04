@@ -10,9 +10,11 @@ supplier, and how to check what clients will be offered.
 
 It builds on two guides:
 
-- [Build a supplier portal](/guides/build-a-supplier-portal) covers sign-in,
-  the two credentials, and the field rules for a schedule and a blocked time.
-  Read [Hours and blocked time](/guides/build-a-supplier-portal#hours-and-blocked-time)
+- [Build a supplier portal](/guides/build-a-supplier-portal) covers sign-in
+  and the two credentials on its
+  [Sign-in and access](/guides/supplier-portal-sign-in-and-access) page, and
+  the field rules for a schedule and a blocked time on its
+  [Availability](/guides/supplier-portal-availability) page. Read [Hours and blocked time](/guides/supplier-portal-availability#hours-and-blocked-time)
   first.
 - [Set up a mobile supplier's service area](/guides/set-up-a-mobile-supplier-service-area)
   covers travel zones. Everything below applies to a schedule that names a
@@ -179,7 +181,7 @@ exdate or a shorter schedule stops new bookings. A booking that already sits
 in that time stays booked, and the client still expects the supplier. Before
 you save time off, list the supplier's bookings in that range with
 `GET /suppliers/me/bookings?startDate=…&endDate=…`, and move or cancel them. See
-[Cancel and reschedule](/guides/build-a-supplier-portal#cancel-and-reschedule).
+[Cancel and reschedule](/guides/supplier-portal-bookings#cancel-and-reschedule).
 </Warning>
 
 To end a block early, `PATCH` its `endDate`. To remove it, `DELETE` it (`204`).

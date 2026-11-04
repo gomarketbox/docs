@@ -11,7 +11,8 @@ A few small or windowed lists return everything in one response, with no
 `cursor` and no `nextCursor`: locations and skills
 ([Locations and skills](/resources/locations)), and the supplier plane's
 lists — bookings in a window, schedules, blocked times, travel zones and
-venues ([Build a supplier portal](/guides/build-a-supplier-portal)). Each
+venues ([Supplier portal: bookings](/guides/supplier-portal-bookings) and
+[Supplier portal: availability](/guides/supplier-portal-availability)). Each
 endpoint's reference says which kind it is.
 
 The catalog lists — `GET .../services` and, under a service, its offerings,
@@ -109,4 +110,4 @@ done
   different list. Start again without it.
 - `400 INVALID_CURSOR` — the same failure on `GET .../suppliers/me/alerts`,
   which has its own code. See
-  [Build a supplier portal](/guides/build-a-supplier-portal#alerts).
+  [Supplier portal: insights and alerts](/guides/supplier-portal-insights-and-alerts#alerts).

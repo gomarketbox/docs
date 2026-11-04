@@ -1,0 +1,5 @@
+| `locationType` | Required alongside it | Must be omitted or `null` |
+| --- | --- | --- |
+| `VIRTUAL` | nothing | `locationId`, `latitude`, `longitude` |
+| `PHYSICAL` | `locationId` — a **Location** id (`loc_…`) | `latitude`, `longitude` (derived from the Location) |
+| `TRAVEL_ZONE` | `locationId` — the **`supplierTravelZoneId`** (`stz_…`) — plus `latitude`, `longitude` and a structured `address` | — |
