@@ -104,7 +104,7 @@ The other fields are optional:
 | Field | Meaning |
 | --- | --- |
 | `heldBy` | Who owns the hold, usually your checkout session id. Defaults to the identity of your API key. Keep it the same for the whole checkout. |
-| `holdDurationMins` | How long to hold, in minutes. Defaults to the project's `suggestionConfig.holdDurationMins`, then 5. |
+| `holdDurationMins` | How long to hold, in minutes. Defaults to the offering's `holdDurationMinsOverride` (slate and slot forms only, where an offering is known), then the project's `suggestionConfig.holdDurationMins`, then 5. |
 | `reservationId` | Extend this hold instead of placing a new one. See [Extending a hold](#extending-a-hold). |
 
 The `201` returns the hold. Every interval is held in one write, so a hold is
@@ -297,6 +297,7 @@ is in [Troubleshooting](/guides/hold-slots-for-checkout#troubleshooting).
 | Place, extend | `404` | `NOT_FOUND` | An interval names a supplier that isn't in this project. |
 | Place, extend | `409` | `SLOT_HELD`, `SLOT_BOOKED` | Someone else holds or has booked the time. |
 | Place, extend | `409` | `SLOT_NOT_FOUND`, `SLATE_NOT_FOUND`, `EMPTY_SLATE` | The slate or slots are unknown, or the slate has no slots. Plan a new slate. |
+| Place, extend | `409` | `SUGGESTION_EXPIRED` | The slate or slots are past their `resolvableUntil`: "Slot … is past its resolvable window". Plan a new slate. |
 | Extend, convert | `409` | `RESERVATION_NOT_FOUND`, `RESERVATION_NOT_HELD`, `RESERVATION_FORBIDDEN` | Unknown hold, a hold already released (or, on extend, converted), or another owner. See [Extending a hold](#extending-a-hold). |
 | Convert | `400` | `INVALID_ORDER_REFERENCE` | The `orderId` isn't an order in this project. |
 | Convert | `400` | `MISSING_BOOKING_TZ` | The hold carries no time zone. Only holds placed before `bookingTz` was required. Release and hold again. |
@@ -306,27 +307,21 @@ is in [Troubleshooting](/guides/hold-slots-for-checkout#troubleshooting).
 | Convert | `409` | `RESERVATION_MULTI_INTERVAL` | A `SINGLE_SESSION` item and a hold of more than one interval. |
 | Convert | `409` | `ORDER_CANCELLED` | The order is `CANCELLED`. |
 | Convert | `422` | `OFFERING_NOT_PRICED` | The item's offering has no `DEFAULT` price rule. |
+| Convert | `409` | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | The `PACKAGE` item has fewer sessions left than the hold has intervals. |
+| Convert | `409` | `PACKAGE_EXPIRED` | A held session starts after the item's `expiresAt`. |
+| Convert | `422` | `PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC` | More than 15 sessions with `atomicity: "all_or_nothing"`. Use `best_effort`, or hold fewer. |
+| Convert | `422` | `BEST_EFFORT_NOT_ENABLED` | `best_effort` without the project's `suggestionConfig.allowPartialPackages`. |
+| Convert | `400` | `NOT_A_PACKAGE_SERVICE` | The `PACKAGE` item's service has no active `PACKAGE` business model. |
 | Any write | `409` | `OCCUPANCY_CONTENTION` | Heavy concurrent writes on the supplier's day. Retry after a short, jittered pause. |
 
-Holds don't enforce a slate's 24-hour window. A `slateId` or `slotIds` older
-than that can still be held, but its times may be stale. Plan a new slate
-rather than holding an old one.
+A hold enforces the slate's 24-hour window when it is placed or extended, so
+its times are never older than the slate allows. Convert doesn't re-check it:
+the hold already carries everything the bookings need, so a client who takes
+a while to pay still books.
 
-<Warning>
-**Some package refusals are a `500` on convert today.** Convert doesn't map
-these four to their own codes, so each comes back as `500 INTERNAL_ERROR`:
-
-- the `PACKAGE` order item has fewer sessions left than the hold has
-  intervals;
-- the package has expired;
-- `atomicity: "best_effort"` without the project's
-  `suggestionConfig.allowPartialPackages`;
-- more than 15 sessions with `atomicity: "all_or_nothing"`.
-
-Nothing is booked. Retrying won't help. Before you convert a package hold,
-check the item's `quantityRemaining` and `expiresAt` on
-`GET /orders/{orderId}/aggregate`.
-</Warning>
+Every package refusal on convert leaves nothing booked, and retrying the same
+call won't help. Before you convert a package hold, check the item's
+`quantityRemaining` and `expiresAt` on `GET /orders/{orderId}/aggregate`.
 
 ## Endpoint index
 

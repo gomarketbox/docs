@@ -78,23 +78,11 @@ const NOT_CODES = new Set([
   // and `ANY` (which pass already: no underscore, so CODE_RE never candidates
   // them).
   'SAME_SUPPLIER',
-  // A real error code that docs-contract.json does not list yet: open-api-mb
-  // throws it from POST /clients/me (clients.routes.ts) for a membership the
-  // business deactivated, but mb-core's error-codes.ts registry omits it, so
-  // contract:sync never carries it. Remove this entry once the contract lists
-  // it — the contract is the right home for it, not this list.
-  'MEMBERSHIP_INACTIVE',
   // Not a `code`: the verbatim prefix of the VALIDATION_ERROR *message* for a
   // COMP transaction with no `reason` (RecordManualTransactionInputSchema in
   // mb-core's transaction.api.ts). resources/transactions.mdx quotes that
   // message exactly, so an integrator can match it.
   'COMP_REASON_REQUIRED',
-  // A real error code that docs-contract.json does not list yet: the shared
-  // package-session builder (clusters-service derive-sessions.ts) throws it
-  // through the route's badRequest for a service with no active PACKAGE
-  // business model, so open-api-mb's error-codes.ts source scan never sees
-  // it. Remove this entry once the contract lists it.
-  'NOT_A_PACKAGE_SERVICE',
 ]);
 
 /** Recursively collects every string member of every `enum` array anywhere

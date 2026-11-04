@@ -337,7 +337,7 @@ stand.
 | `locationIds`, `locations` | The Locations the offering is available at. `locations` is the same list with names and addresses. |
 | `attributeValues` | The offering's values for the service's attributes. |
 | `status` | `ACTIVE` or `INACTIVE`. |
-| `holdDurationMinsOverride` | Accepted on create and update but not stored today, so it always reads back empty and never changes how long a hold lasts. |
+| `holdDurationMinsOverride` | How long, in minutes, a hold placed from a slate or slot of this offering lasts when the hold request sends no `holdDurationMins`. `null` on update clears it, so holds fall back to the project's `suggestionConfig.holdDurationMins`. Absent or `null` when unset. See [Holds](/resources/holds). |
 
 `skills` and `locations` come back on the list and on the single read. An id
 that no longer resolves, such as an inactive skill, is left out of `skills`,
