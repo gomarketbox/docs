@@ -39443,7 +39443,7 @@
       "post": {
         "tags": ["Holds"],
         "summary": "Hold supplier time during checkout — a single session, or a whole package slate",
-        "description": "Claims supplier time so nobody else can book it while your client pays. Provide exactly one of: intervals (explicit supplier time — this is the form that works for a SINGLE session, with no package and no slate), slateId (hold every slot of a persisted package slate), or slotIds (cherry-pick slots of a slate). Every interval is claimed in ONE transaction, so a hold is all-or-nothing — you never end up holding 3 sessions of a 5-session package. Expiry is LAZY: nothing runs at heldUntil, the hold simply stops blocking, so convert before then. To HEARTBEAT a checkout page, re-post the same intervals AND the reservationId you were given (with the same heldBy): that EXTENDS the existing hold — heldUntil moves out, the same reservationId comes back, and no second hold is minted. Omitting reservationId always mints a NEW hold. Returns 409 with code SLOT_HELD/SLOT_BOOKED — naming the blocking reservationId or bookingId — when the time is already claimed, or RESERVATION_NOT_FOUND / RESERVATION_NOT_HELD / RESERVATION_FORBIDDEN when the reservationId you asked to extend is unknown, no longer held, or not yours.",
+        "description": "Claims supplier time so nobody else can book it while your client pays. Provide exactly one of: intervals (explicit supplier time — this is the form that works for a SINGLE session, with no package and no slate), slateId (hold every slot of a persisted package slate), or slotIds (cherry-pick slots of a slate). Every interval is claimed in ONE transaction, so a hold is all-or-nothing — you never end up holding 3 sessions of a 5-session package. Expiry is LAZY: nothing runs at heldUntil, the hold simply stops blocking, so convert before then. To HEARTBEAT a checkout page, re-post the same intervals AND the reservationId you were given (with the same heldBy): that EXTENDS the existing hold — heldUntil moves out, the same reservationId comes back, and no second hold is minted. Omitting reservationId always mints a NEW hold. Returns 409 with code SLOT_HELD/SLOT_BOOKED — naming the blocking reservationId or bookingId — when the time is already claimed, or RESERVATION_NOT_FOUND / RESERVATION_NOT_HELD / RESERVATION_FORBIDDEN when the reservationId you asked to extend is unknown, no longer held, or not yours. A slateId/slotIds hold (new or extended) whose slots are past their resolvableUntil is 409 SUGGESTION_EXPIRED, as package-bookings answers it: the times were planned from availability that may have changed, so plan a fresh slate. An unknown slate or slot is 409 SLATE_NOT_FOUND / SLOT_NOT_FOUND.",
         "parameters": [
           {
             "schema": {
@@ -39795,7 +39795,7 @@
             }
           },
           "409": {
-            "description": "Supplier time already held/booked, or the slate/slot is stale",
+            "description": "Supplier time already held/booked (SLOT_HELD, SLOT_BOOKED, OCCUPANCY_CONTENTION), the slate/slot is stale (SUGGESTION_EXPIRED, SLATE_NOT_FOUND, SLOT_NOT_FOUND, EMPTY_SLATE), or the hold to extend cannot be (RESERVATION_NOT_FOUND, RESERVATION_NOT_HELD, RESERVATION_FORBIDDEN)",
             "content": {
               "application/json": {
                 "schema": {
@@ -39896,7 +39896,7 @@
                       "properties": {
                         "code": {
                           "type": "string",
-                          "description": "Why the hold could not be used: HOLD_EXPIRED, RESERVATION_NOT_FOUND, RESERVATION_NOT_HELD, RESERVATION_FORBIDDEN, RESERVATION_MULTI_INTERVAL (a SINGLE_SESSION order item converts exactly one held interval), SLOT_NOT_FOUND, SLATE_NOT_FOUND, EMPTY_SLATE.",
+                          "description": "Why the hold could not be used: HOLD_EXPIRED, RESERVATION_NOT_FOUND, RESERVATION_NOT_HELD, RESERVATION_FORBIDDEN, RESERVATION_MULTI_INTERVAL (a SINGLE_SESSION order item converts exactly one held interval), SLOT_NOT_FOUND, SLATE_NOT_FOUND, EMPTY_SLATE, SUGGESTION_EXPIRED (placing or extending a hold from a slate or slot past its resolvableUntil: plan a fresh slate).",
                           "example": "HOLD_EXPIRED"
                         },
                         "message": {
@@ -40391,7 +40391,7 @@
             }
           },
           "409": {
-            "description": "Hold expired / not yours / already released, the time is now taken (SLOT_HELD / SLOT_BOOKED), the calendar is under contention (OCCUPANCY_CONTENTION), or the order is cancelled (code: ORDER_CANCELLED)",
+            "description": "Hold expired / not yours / already released, the time is now taken (SLOT_HELD / SLOT_BOOKED), the calendar is under contention (OCCUPANCY_CONTENTION), the order is cancelled (code: ORDER_CANCELLED), the package has expired (PACKAGE_EXPIRED), or the order item has fewer sessions left than the hold has intervals (ORDER_ITEM_QUANTITY_UNAVAILABLE)",
             "content": {
               "application/json": {
                 "schema": {
@@ -40495,7 +40495,7 @@
                       "properties": {
                         "code": {
                           "type": "string",
-                          "description": "Why the hold could not be used: HOLD_EXPIRED, RESERVATION_NOT_FOUND, RESERVATION_NOT_HELD, RESERVATION_FORBIDDEN, RESERVATION_MULTI_INTERVAL (a SINGLE_SESSION order item converts exactly one held interval), SLOT_NOT_FOUND, SLATE_NOT_FOUND, EMPTY_SLATE.",
+                          "description": "Why the hold could not be used: HOLD_EXPIRED, RESERVATION_NOT_FOUND, RESERVATION_NOT_HELD, RESERVATION_FORBIDDEN, RESERVATION_MULTI_INTERVAL (a SINGLE_SESSION order item converts exactly one held interval), SLOT_NOT_FOUND, SLATE_NOT_FOUND, EMPTY_SLATE, SUGGESTION_EXPIRED (placing or extending a hold from a slate or slot past its resolvableUntil: plan a fresh slate).",
                           "example": "HOLD_EXPIRED"
                         },
                         "message": {
@@ -40523,7 +40523,7 @@
             }
           },
           "422": {
-            "description": "The held location is a PHYSICAL Location without coordinates (UNPROCESSABLE_ENTITY)",
+            "description": "The hold has more intervals than an all_or_nothing booking can write at once (PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC), best_effort is not enabled for this project (BEST_EFFORT_NOT_ENABLED), or the held location is a PHYSICAL Location without coordinates (UNPROCESSABLE_ENTITY)",
             "content": {
               "application/json": {
                 "schema": {

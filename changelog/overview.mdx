@@ -5,13 +5,15 @@ description: "New features, updates, and fixes to the MarketBox API."
 
 <Update label="November 3, 2026" tags={["API"]}>
 
-## Clients can dispute attendance; delete refuses a real order; booking writes answer 4xx instead of 500; stale availability versions are `VERSION_CONFLICT`
+## Clients can dispute attendance; delete refuses a real order; expired slates can't be held; booking writes answer 4xx instead of 500; stale availability versions are `VERSION_CONFLICT`
 
 A client's report that they didn't attend can now open a dispute. Deleting an order that holds bookings or money is refused, and deleting an order now cancels its bookings. Booking writes that used to fail with `500 INTERNAL_ERROR` now return a code you can act on. A stale `version` on a supplier's schedule, blocked time or travel zone has its own code.
 
-**Two breaking changes, one behaviour change, the rest additive.** No field was removed or renamed.
+**Three breaking changes, one behaviour change, the rest additive.** No field was removed or renamed.
 
 **Breaking**
+
+- **A hold from an expired slate is refused.** `POST …/holds` with `slateId` or `slotIds` past its `resolvableUntil` now answers `409 SUGGESTION_EXPIRED`, "Slot … is past its resolvable window". This includes extending a hold. It used to succeed, holding times planned from availability that may have changed. Plan a fresh slate and hold that. Convert still doesn't re-check the window, so a client who takes a while to pay still books. See [Holds](/resources/holds).
 
 - **`DELETE …/orders/{orderId}` refuses a real order.** An order holding a booking (booked or delivered), or a `PENDING` or `SUCCEEDED` payment or refund, now answers `409 ORDER_NOT_DELETABLE` and nothing changes. Cancel it with `POST …/orders/{orderId}/status` instead. An order that books nothing and took no money still deletes. See [Orders](/resources/orders#the-order-lifecycle).
 - **A stale availability `version` is `409 VERSION_CONFLICT`, not `409 CONFLICT`.** This covers `PATCH` on `…/suppliers/me/schedules/{scheduleId}`, `…/blocked-times/{blockedTimeId}` and `…/travel-zones/{travelZoneId}`, and another write landing during a `DELETE` of any of them. The status is still `409`. An overlapping `ACTIVE` schedule stays `409 CONFLICT`, so branch on `code`. See [Build a supplier portal](/guides/build-a-supplier-portal#set-working-hours).
@@ -29,6 +31,9 @@ A client's report that they didn't attend can now open a dispute. Deleting an or
   - `404 NOT_FOUND` for an unknown location, and `400 BAD_REQUEST` for one of the wrong type or another supplier's travel zone;
   - `422 UNPROCESSABLE_ENTITY` for a `PHYSICAL` Location without coordinates.
 - **Converting a `PHYSICAL` hold works.** It used to fail with a `500`.
+- **Converting a package hold answers package refusals with their own codes,** as `POST …/package-bookings` does, instead of `500`: `409 ORDER_ITEM_QUANTITY_UNAVAILABLE`, `409 PACKAGE_EXPIRED`, `422 PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC` and `422 BEST_EFFORT_NOT_ENABLED`. Nothing is booked in any of them.
+- **An offering's `holdDurationMinsOverride` is saved.** It was accepted but dropped, so holds ignored it. A hold placed from a slate or slot of that offering now lasts that long when the request sends no `holdDurationMins`. `null` clears it.
+- **`NOT_A_PACKAGE_SERVICE` is listed with the other error codes.** The API already returned it (`400`) for a `PACKAGE` booking or convert whose service has no active `PACKAGE` business model.
 - **Deleting an order cancels its bookings.** A delete sets the order `CANCELLED`, but its bookings used to stay `SCHEDULED`. Now any booking that reaches the order during the delete is cancelled, without emails.
 - **Package-booking examples use the real `off_` offering prefix.** The reference showed `offr_`.
 - **A supplier's move under calendar contention** (`PATCH …/suppliers/me/bookings/{bookingId}`) is `409 OCCUPANCY_CONTENTION`, not `500`.
@@ -41,13 +46,14 @@ A client's report that they didn't attend can now open a dispute. Deleting an or
 
 **What this means for you**
 
+- **Hold only fresh slates.** On `409 SUGGESTION_EXPIRED` from `POST …/holds`, plan a new slate rather than retrying.
 - **Cancel orders instead of deleting them.** Keep delete for an order raised in error that books nothing and took no money.
 - **Branch on `VERSION_CONFLICT` in your supplier portal.** Re-read the row and retry on it, and show an overlap message only on `CONFLICT`.
 - **Don't treat `COMPLETED` as final for 24 hours.** Anything you do once a session is delivered, such as payouts or follow-ups, should wait out the dispute window.
 - **Handle `DISPUTED` wherever you show a booking's status.** An operator resolves it in the MarketBox console; your key can't.
 - **Stop retrying booking writes that failed with a 500.** The same failures now arrive as a 4xx that says what to fix.
 
-Full detail: [Orders → The order lifecycle](/resources/orders#the-order-lifecycle), [Bookings → Attendance and disputes](/resources/bookings#attendance-and-disputes), [Bookings → Creating a booking](/resources/bookings#creating-a-booking), [Build a supplier portal → Set working hours](/guides/build-a-supplier-portal#set-working-hours), [Errors](/concepts/errors).
+Full detail: [Holds](/resources/holds), [Orders → The order lifecycle](/resources/orders#the-order-lifecycle), [Bookings → Attendance and disputes](/resources/bookings#attendance-and-disputes), [Bookings → Creating a booking](/resources/bookings#creating-a-booking), [Build a supplier portal → Set working hours](/guides/build-a-supplier-portal#set-working-hours), [Errors](/concepts/errors).
 
 </Update>
 

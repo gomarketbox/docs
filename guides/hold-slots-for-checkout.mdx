@@ -198,9 +198,9 @@ Locations and fail with `404 Location stz_… not found`. See
 <Note>
 **Exactly one of `intervals`, `slateId`, or `slotIds`.** Sending two (or
 none) is a `400 VALIDATION_ERROR`. `holdDurationMins` is optional and
-resolves: your value → the project's `suggestionConfig.holdDurationMins` →
-**5 minutes**. An offering's `holdDurationMinsOverride` is accepted on the
-offering but not stored today, so it never applies.
+resolves: your value → the offering's `holdDurationMinsOverride` (slate and
+slot forms only, where an offering is known) → the project's
+`suggestionConfig.holdDurationMins` → **5 minutes**.
 </Note>
 
 <Tip>
@@ -716,7 +716,7 @@ except `OCCUPANCY_CONTENTION` is worth retrying unchanged.
 | `400` | `VALIDATION_ERROR` | More than one — or none — of `intervals` / `slateId` / `slotIds`. | Provide exactly one. |
 | `409` | `SLOT_HELD` | The time is claimed by a live hold. **Very often your own**, if you called a direct booking route instead of convert. | The first `conflicts[]` entry with `claimType: "HOLD"` names it in `reservationId`. Yours → convert it. Someone else's → `heldUntil` says when it lapses; offer another slot. See [Handling a held slot](#handling-a-held-slot). |
 | `409` | `SLOT_BOOKED` | A confirmed booking occupies the time. | `conflicts[0].bookingId` names it. Gone for good — search availability again. |
-| `409` | `SLOT_NOT_FOUND` / `SLATE_NOT_FOUND` / `EMPTY_SLATE` | The `slateId` / `slotIds` you're holding is unknown, from another project, or has no slots. A hold doesn't check the slate's 24-hour window, so an old slate can still be held, with stale times. | Rebuild the slate with `POST /availability/package-slate` and hold the fresh one. Don't retry the stale id, and don't hold a slate older than its `resolvableUntil`. |
+| `409` | `SLOT_NOT_FOUND` / `SLATE_NOT_FOUND` / `SUGGESTION_EXPIRED` / `EMPTY_SLATE` | The `slateId` / `slotIds` you're holding is unknown, from another project, past its `resolvableUntil` ("Slot … is past its resolvable window"), or has no slots. Extending a hold from an expired slate is refused the same way. | Rebuild the slate with `POST /availability/package-slate` and hold the fresh one. Don't retry the stale id. |
 | `409` | `RESERVATION_NOT_FOUND` | You passed a `reservationId` to extend and no such hold exists in this project. | Drop `reservationId` to mint a new hold. |
 | `409` | `RESERVATION_NOT_HELD` | The `reservationId` you're extending is already `CONVERTED` or `RELEASED`. | Terminal. Start a fresh hold (or, if it converted, you're already booked — check `GET /holds/{reservationId}`). |
 | `409` | `RESERVATION_FORBIDDEN` | The `heldBy` you sent doesn't own that `reservationId`. | Send the same `heldBy` the hold was created with. Keep it stable for the whole checkout. |
@@ -742,7 +742,11 @@ except `OCCUPANCY_CONTENTION` is worth retrying unchanged.
 | `409` | `RESERVATION_FORBIDDEN` | `heldBy` doesn't match the hold's owner. | Send the same `heldBy` you held with. |
 | `409` | `SLOT_HELD` / `SLOT_BOOKED` | Someone else claimed the time while your client was paying (only possible after your hold lapsed). | The time is gone. Offer the client a fresh slot and convert a new hold against the same order item. The public API has no refund endpoint: if the client wants their money back, the business refunds the payment from the MarketBox dashboard. |
 | `409` | `OCCUPANCY_CONTENTION` | Row contention on the supplier's day. | **Retryable** — convert is idempotent, so resending is safe. |
-| `500` | `INTERNAL_ERROR` | Convert doesn't yet map four package refusals to their own codes: more than 15 sessions with `atomicity: "all_or_nothing"`, `best_effort` without `suggestionConfig.allowPartialPackages`, fewer sessions left on the item than the hold has intervals, and an expired package. Nothing is booked. | Retrying won't help. Before converting, check the item's `quantityRemaining` and `expiresAt`, and keep an `all_or_nothing` hold to 15 sessions or fewer. |
+| `409` | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | The `PACKAGE` item has fewer sessions left than the hold has intervals. Nothing is booked. | Check `quantityRemaining` on `GET /orders/{orderId}/aggregate`, then hold fewer sessions or sell another package. |
+| `409` | `PACKAGE_EXPIRED` | A held session starts after the item's `expiresAt`. Nothing is booked. | Hold sessions before the expiry, or sell another package. |
+| `422` | `PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC` | More than 15 sessions with `atomicity: "all_or_nothing"`. | Convert with `atomicity: "best_effort"` (needs `suggestionConfig.allowPartialPackages`), or hold a smaller slate. |
+| `422` | `BEST_EFFORT_NOT_ENABLED` | `atomicity: "best_effort"`, but the project's `suggestionConfig.allowPartialPackages` is off. | Convert with `all_or_nothing` (15 sessions or fewer), or ask the business to enable partial packages. |
+| `400` | `NOT_A_PACKAGE_SERVICE` | The `PACKAGE` item's service has no active `PACKAGE` business model. | The business turns on a `PACKAGE` business model for the service. See [Packages](/resources/packages). |
 
 <Note>
 `GET /holds/{reservationId}` is your debugger. It returns the reservation
