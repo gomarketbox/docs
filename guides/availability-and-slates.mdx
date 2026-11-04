@@ -1278,7 +1278,9 @@ convert. See [Concurrency](/concepts/concurrency).
 | `/v1/projects/{projectId}/suggestions/slots/{slotId}/reschedule` | `POST` | `x-api-key` | Move one slot of a stored slate to a new time before anything is booked. Full reference: [Suggestions](/resources/suggestions#rescheduling-a-slot). |
 
 For suggestion requests, slates and slots as objects, and the 24-hour window
-they stay usable in, see [Suggestions](/resources/suggestions). For the hold
+they stay usable in, see [Suggestions](/resources/suggestions). To let a
+client move one session of a slate before you hold or book it, see
+[Let clients adjust a proposed slate](/guides/adjust-a-proposed-slate). For the hold
 object, see [Holds](/resources/holds).
 
 ### Configuration

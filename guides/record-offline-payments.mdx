@@ -1,0 +1,338 @@
+---
+title: Record offline payments
+description: Record cash, bank transfers and comps against an order, retry safely, settle the order to PAID, and reconcile the ledger.
+---
+
+Not every client pays by card through your site. Some pay cash at the door,
+some by bank transfer, and sometimes the business waives a charge. This guide
+records that money in MarketBox, so the order shows what was paid and
+settles to `PAID` when it's covered.
+
+Card payments don't belong here. They go through Stripe: see
+[Accept payments with Stripe](/guides/accept-payments-with-stripe).
+
+For the transaction object, every kind and source, and the full list of
+refusals, see [Transactions](/resources/transactions).
+
+<Note>
+Both routes in this guide take the `x-api-key` header alone. Call them from
+your server or the business's own tools, never from a client's browser.
+</Note>
+
+## How it works
+
+1. **Read the order.** Check its `status`, its currency and what it still
+   owes.
+2. **Record the money.** `POST /orders/{orderId}/transactions` with a `kind`,
+   a `source`, the amount and an `idempotencyKey`.
+3. **Check the result.** `201` is a new recording, `200` is a replay of one
+   you already made. When the ledger covers the order's total, the order is
+   `PAID`.
+4. **Reconcile later.** `GET /transactions` reads the ledger back.
+
+## Step 1: Read the order
+
+`GET /v1/projects/{projectId}/orders/{orderId}` returns the figures you need:
+
+| Field | Use |
+| --- | --- |
+| `status` | Take money only against a `DRAFT` or `PENDING` order. |
+| `total` | What the order costs, in integer minor units. |
+| `amountPaid` | What's been paid so far. |
+| `amountComped` | What's been waived so far. Absent means zero. |
+| `total.currency` | The currency every recording must use. |
+
+What the order still owes is `total.amount - amountPaid.amount -
+(amountComped?.amount ?? 0)`. For a `total` of `9000` with `4500` paid, the
+balance is `4500`, which is $45.00.
+
+**The recording route doesn't check the order's status.** A payment on a
+`PAID` or `CANCELLED` order is recorded, and `amountPaid` rises, but the
+status doesn't change. Nothing in the API can give that money back: refunds
+are made in the MarketBox dashboard. So read the order first, and refuse to
+take money against one that's already settled or cancelled.
+
+## Step 2: Record the money
+
+Pick the `kind` and `source` from what happened:
+
+| What happened | `kind` | `source` | `reason` |
+| --- | --- | --- | --- |
+| Cash in hand | `PAYMENT` | `CASH` | Optional |
+| Bank transfer, cheque, a terminal outside Stripe | `PAYMENT` | `EXTERNAL` | Optional |
+| The business waives what's left | `ADJUSTMENT` | `COMP` | **Required** |
+
+```json
+// POST /v1/projects/{projectId}/orders/{orderId}/transactions
+{
+  "kind": "PAYMENT",
+  "source": "CASH",
+  "amount": { "amount": 4500, "currency": "CAD" },
+  "note": "Paid at the door",
+  "idempotencyKey": "9f8c0f7a-1f3f-4c8e-9a2b-6c7d8e9f0a1b"
+}
+```
+
+- `amount.amount` is in minor units. `4500` is $45.00.
+- `amount.currency` must be the order's currency. An order's currency never
+  changes, and the route doesn't convert.
+- `note` is free text for the business's team, up to 500 characters.
+- `clientId` is optional. Leave it out to use the order's client.
+
+The row is written `SUCCEEDED` at once. There is nothing to poll.
+
+### Send an idempotency key
+
+A cash recording is the request you least want to make twice. Make an
+`idempotencyKey` (a UUID is fine) **when someone presses Record**,
+store it with the payment on your side, and send the same key on every retry.
+
+- The first call records the money and returns `201`, with `replayed: false`.
+- The same key on the same order returns the row the first call made, as
+  `200` with `replayed: true`. Nothing is recorded again.
+
+```json
+{
+  "data": {
+    "transactionId": "txn_01kx16f2a0h8a2my9u3f4tv0sp",
+    "orderId": "ord_01kx16f2a0h8a2my9u3f4tv0sp",
+    "kind": "PAYMENT",
+    "source": "CASH",
+    "status": "SUCCEEDED",
+    "amount": { "amount": 4500, "currency": "CAD" },
+    "channel": "OPEN_API"
+  },
+  "replayed": true
+}
+```
+
+Show "recorded" on either. Count the money only on a `201`: a `200` is money
+you already counted.
+
+A replay returns the original row as it was. The server doesn't compare
+bodies, so a retry with the same key and a different amount still returns
+the first amount. A retry must still be a valid request, though: the body,
+the order, the currency and any `clientId` are checked before the key, so a
+retry that fails one of those gets the `400` or `404`, not the replay. Use a new key for a new payment, and never reuse one across
+two payments on the same order.
+
+### Waive what's left with a comp
+
+To waive a balance, record an `ADJUSTMENT` with `source: COMP` for the amount
+still owed, with a `reason`:
+
+```json
+// POST /v1/projects/{projectId}/orders/{orderId}/transactions
+{
+  "kind": "ADJUSTMENT",
+  "source": "COMP",
+  "amount": { "amount": 4500, "currency": "CAD" },
+  "reason": "Service recovery — late supplier",
+  "idempotencyKey": "3b7e1d9a-5c2f-4e08-a6b4-9d1c7f3e2a58"
+}
+```
+
+It raises `amountComped`, not `amountPaid`, so reports keep money waived
+apart from money received.
+
+**Comp last.** A card checkout charges `total` minus `amountPaid`, and
+ignores `amountComped`. So if you comp part of an order and then send the
+client to pay by card, they're charged for the comped part too. Take the
+card payment first, then comp what's left. Record why the charge was waived, not that it was:
+the row already says that.
+
+A comp with no `reason` is refused, and nothing is recorded:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "reason: COMP_REASON_REQUIRED: a comp needs a reason",
+  "statusCode": 400,
+  "requestId": "1d6a3f8c-9b2e-4c74-a5d0-7e2b9c1f4a63"
+}
+```
+
+A `reason` of only spaces is a `400 BAD_REQUEST`, `A COMP transaction needs a
+reason`.
+
+Two other rows are accepted but rarely what you want:
+
+- `PAYMENT` with `source: COMP` counts toward `amountPaid`, as if the waived
+  money were received. It needs a `reason` too, like every comp. Use
+  `ADJUSTMENT` instead, so your cash figures stay true.
+- `ADJUSTMENT` with `CASH` or `EXTERNAL` is a note in the ledger. It doesn't
+  move the balance or settle the order.
+
+## Step 3: Check the result
+
+### The order becomes `PAID`
+
+When `amountPaid` plus `amountComped` covers `total`, a `DRAFT` or `PENDING`
+order becomes `PAID` **in the same write** as the recording. Two fields are
+stamped on it then:
+
+- `paymentMethod`: `CASH`, `EXTERNAL` or `COMP`, or `MIXED` when more than
+  one source paid.
+- `settledAt`: when the recording that completed it was made.
+
+The response is the transaction, not the order. To show the new status, read
+the order. In the rare case the read still shows the old status, read once
+more a moment later.
+
+A recording that doesn't cover the balance is a part payment. The order
+keeps its status until a later payment or comp covers it, so you can take a
+deposit now and the rest at the session. An `ADJUSTMENT` with `CASH` or
+`EXTERNAL` never settles an order.
+
+You can't ask for `PAID` yourself. `POST /orders/{orderId}/status` with
+`PAID` is `409 ORDER_NOT_SETTLED`. See
+[Order lifecycle after checkout](/guides/order-lifecycle-after-checkout#paid-comes-from-the-ledger).
+
+### What `PAID` unlocks
+
+- **A signed-in client's package credits.** A client can see and book a
+  package only once its order is `PAID`. See
+  [Book a client's package credit](/guides/book-a-package-credit). So when a
+  client pays cash for a package, record it before they try to book.
+- **Nothing else.** Single bookings, and package bookings made with your API
+  key, don't wait for `PAID`. See
+  [Order lifecycle after checkout](/guides/order-lifecycle-after-checkout#an-unpaid-order-still-books).
+
+### A recorded order can't be deleted
+
+Once an order holds any recorded transaction, including a comp or an
+adjustment, `DELETE /orders/{orderId}` refuses it with
+`409 ORDER_NOT_DELETABLE`. Cancel it instead. See
+[Cancel or delete](/guides/order-lifecycle-after-checkout#cancel-or-delete).
+
+## When a recording is refused
+
+Nothing is recorded on any of these.
+
+The currency doesn't match the order's:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Transaction currency USD does not match order currency CAD",
+  "statusCode": 400,
+  "requestId": "6e2a9c4f-3b8d-4f17-a5c0-1d7e9b3f6a24"
+}
+```
+
+Send the order's currency. If the client paid in another currency, convert
+it on your side and say so in `note`.
+
+The order changed while the payment was being recorded:
+
+```json
+{
+  "code": "VERSION_CONFLICT",
+  "message": "Order ord_01kx16f2a0h8a2my9u3f4tv0sp was modified concurrently while recording a transaction",
+  "statusCode": 409,
+  "requestId": "9a4c1e7b-2d5f-4b83-a6e0-8c3f1d9b5e72"
+}
+```
+
+Retry with the **same** `idempotencyKey`. The key makes sure the retry can't
+record twice.
+
+`409 TRANSACTION_IDEMPOTENCY_RECORD_MISSING` is the exception. The key was
+used, but its row can't be read back. It's terminal: retrying can never
+succeed. Don't retry, and don't record the payment again under a new key.
+Read the order's ledger (see [Reconcile the ledger](#reconcile-the-ledger))
+and contact support with the `requestId`.
+
+The rest are in
+[Refusals](/resources/transactions#refusals).
+
+## A recording was wrong
+
+The ledger is append-only. No route edits or deletes a row, and `kind:
+REFUND` is refused. To correct a mistake:
+
+- **Too little recorded:** record the difference as another payment.
+- **Too much recorded, or the wrong order:** refund or correct it in the
+  MarketBox dashboard. The public API has no refund route.
+
+## Reconcile the ledger
+
+`GET /v1/projects/{projectId}/transactions` reads the ledger, newest first.
+It takes one of `orderId`, `clientId` or `status`, with an optional
+`startDate` and `endDate`.
+
+**The three filters don't combine.** Only one takes effect, in the order
+`orderId`, `clientId`, `status`, and the rest are ignored without an error.
+So `orderId` with `status=SUCCEEDED` returns every row on the order. Send one
+filter, and filter the rest on your side.
+
+To total a day's cash and transfers, list by `status=SUCCEEDED` for the day,
+then count by `source` on your side:
+
+```bash
+curl "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/transactions?status=SUCCEEDED&startDate=2026-11-03T05:00:00.000Z&endDate=2026-11-04T05:00:00.000Z&limit=200" \
+  -H "x-api-key: $MARKETBOX_API_KEY"
+```
+
+- `startDate` is inclusive and `endDate` is exclusive. Pass the next day's
+  start as `endDate`. Both are UTC instants, so turn the business's local
+  midnight into one first.
+- Send both with milliseconds, as `.000Z`. The bounds are compared with each
+  row's timestamp as text, so `…T05:00:00Z` lands up to a second off.
+- Page with `cursor` until `nextCursor` is `null`. A page can hold fewer than
+  `limit` rows before the end, so never stop on a short page. See
+  [Pagination](/concepts/pagination).
+
+Then sum by `source`:
+
+```ts
+const collected: Record<string, number> = {};
+for (const row of rows) {
+  if (row.status !== 'SUCCEEDED') continue; // a PENDING card row isn't money yet
+  const sign = row.kind === 'PAYMENT' ? 1 : row.kind === 'REFUND' ? -1 : 0;
+  if (sign === 0) continue; // adjustments and package credits aren't money collected
+  collected[row.source] = (collected[row.source] ?? 0) + sign * row.amount.amount;
+}
+```
+
+- Count only `SUCCEEDED` rows. A `PENDING` Stripe row is a payment started,
+  not money received. When you list by `orderId` or `clientId`, every status
+  comes back.
+- Leave out `ADJUSTMENT` rows. An `ADJUSTMENT` with `source: COMP` is money
+  waived. Report it apart from what you collected.
+- Leave out `CREDIT_REDEMPTION` and `CREDIT_REVERSAL`. They track package
+  sessions, not money.
+- Report a `PAYMENT` with `source: COMP` apart from `CASH`, even though it
+  counts as paid.
+
+For "which orders were settled in cash last month",
+`GET /orders?paymentMethod=CASH` is quicker, but it misses `MIXED` orders and
+orders not yet `PAID`. See
+[Summing the ledger](/resources/transactions#summing-the-ledger).
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/v1/projects/{projectId}/orders/{orderId}` | `GET` | Read `status`, `total`, `amountPaid` and `amountComped` before you record. |
+| `/v1/projects/{projectId}/orders/{orderId}/transactions` | `POST` | Record cash, an external payment or a comp. `201` new, `200` replay. |
+| `/v1/projects/{projectId}/transactions` | `GET` | Read the ledger. One of `orderId`, `clientId`, `status`, plus dates. |
+| `/v1/projects/{projectId}/orders` | `GET` | `?paymentMethod=` lists settled orders by how they were paid. |
+
+### Errors and edge cases
+
+| Scenario | `code` | Status | Resolution |
+| --- | --- | --- | --- |
+| A comp (`ADJUSTMENT` or `PAYMENT`) with no `reason` | `VALIDATION_ERROR` | `400` | Send `reason`, 1–500 characters. |
+| A comp `reason` of only spaces | `BAD_REQUEST` | `400` | Send a real reason. |
+| `kind: REFUND` or `source: STRIPE` | `VALIDATION_ERROR` | `400` | Refund in the dashboard. Take cards through the payment-intent flow. |
+| The wrong currency | `BAD_REQUEST` | `400` | Send the order's currency. |
+| The order doesn't exist, or was deleted | `NOT_FOUND` | `404` | Check the `orderId`. |
+| `clientId` isn't a client in this project | `NOT_FOUND` | `404` | Leave `clientId` out to use the order's. |
+| The order changed during the write | `VERSION_CONFLICT` | `409` | Retry with the same `idempotencyKey`. |
+| The key was used but its row can't be read | `TRANSACTION_IDEMPOTENCY_RECORD_MISSING` | `409` | Terminal. Don't retry. Contact support with the `requestId`. |
+| The same key sent again | — | `200` | Not an error: `replayed: true`, nothing recorded. |
+| A payment on a `PAID` or `CANCELLED` order | — | `201` | Recorded, and `amountPaid` rises. Check the status before you record. |
+| Asking for `PAID` on the status route | `ORDER_NOT_SETTLED` | `409` | Record the money instead. |

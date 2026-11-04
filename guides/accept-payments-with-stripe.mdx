@@ -11,6 +11,9 @@ It builds on [Build a booking flow](/guides/booking-flow-auth): you already have
 an API key, the [backend-for-frontend (BFF)](/guides/booking-flow-auth#the-bff-pattern)
 pattern, and can create orders. Here you add the payment step.
 
+For cash, bank transfers and comps, which don't go through Stripe, see
+[Record offline payments](/guides/record-offline-payments).
+
 ## How payments work
 
 MarketBox charges cards through **Stripe Connect** using **direct charges**: the

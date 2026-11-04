@@ -1,0 +1,303 @@
+---
+title: Order lifecycle after checkout
+description: What happens to an order after it's placed — how it moves between statuses, how it settles to PAID, changing its items, cancelling it and its bookings, and when to delete instead.
+---
+
+An order is created at checkout, but its life doesn't end there. It gets
+paid, or not. Items change. Sessions are booked from it. Sometimes the whole
+thing is called off. This guide walks through what you can do to an order
+after it's placed, and what the API does on its own.
+
+For the order object, its fields and every route, see
+[Orders](/resources/orders). For how an order is created and paid in the
+first place, see
+[Client checkout, end to end](/guides/client-checkout-end-to-end).
+
+<Note>
+The public API sends no webhooks. When something changes an order after your
+request returns, such as a card payment settling or a cancel cascade
+finishing, you find out by reading it again. See
+[Tracking state without webhooks](/concepts/tracking-state-without-webhooks).
+</Note>
+
+## The four statuses
+
+| Status | Meaning | Set by |
+| --- | --- | --- |
+| `DRAFT` | Created and not settled. Every order starts here. | Order create, or you. |
+| `PENDING` | Not settled. A marker you can set, such as "waiting for payment". Nothing in the API sets it for you. | You. |
+| `PAID` | The ledger covers the total. | The ledger, never a request. |
+| `CANCELLED` | Called off. Final. | You, or a delete. |
+
+`DRAFT` and `PENDING` behave the same everywhere in the API: both take
+payments, both fund bookings, and both can be cancelled. Use `PENDING` only if
+your own flow needs to tell the two apart.
+
+## Move an order between statuses
+
+`POST /v1/projects/{projectId}/orders/{orderId}/status` allows only these
+moves:
+
+- `DRAFT` → `PENDING` or `CANCELLED`
+- `PENDING` → `DRAFT` or `CANCELLED`
+- `PAID` → `CANCELLED`
+- `CANCELLED` → nothing
+
+```json
+// POST /v1/projects/{projectId}/orders/{orderId}/status
+{ "status": "PENDING" }
+```
+
+The `200` returns the order. Any other move, including a move to the status
+the order already has, is a `400`:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Cannot transition order status from CANCELLED to DRAFT",
+  "statusCode": 400,
+  "requestId": "3d8b1f6a-9c2e-4a75-b0d4-6e1f8c3a9b27"
+}
+```
+
+`409 VERSION_CONFLICT` means the order changed while the server was applying
+your request, for example because a payment settled it. Read it again and decide
+again. See [Concurrency](/concepts/concurrency#optimistic-versioning-on-updates).
+
+### `PAID` comes from the ledger
+
+You can't ask for `PAID`. An order becomes `PAID` in the same write that
+records the money that covers its total:
+
+- **A card payment** settles when Stripe tells MarketBox, usually a second or
+  two after the client confirms. See
+  [Accept payments with Stripe](/guides/accept-payments-with-stripe).
+- **Cash, a bank transfer or a comp** settles when you record it. See
+  [Record offline payments](/guides/record-offline-payments).
+
+Asking for `PAID` on the status route is a `409`, and retrying won't help:
+
+```json
+{
+  "code": "ORDER_NOT_SETTLED",
+  "message": "Order ord_01kx16f2a0h8a2my9u3f4tv0sp cannot be marked PAID by hand. Record a payment (or a comp) instead; the order becomes PAID when the ledger covers its total.",
+  "statusCode": 409,
+  "requestId": "0f3b8d2e-6a1c-4e97-b5d4-8c2a7e9f1b36"
+}
+```
+
+To mark an order paid without taking money, record a comp for what it owes.
+
+A `PAID` order takes no more card payments.
+`POST /orders/{orderId}/payment-intent` on one is a `400`,
+`Order ord_… is PAID; cannot take payment`.
+
+## An unpaid order still books
+
+Payment doesn't gate booking. A `DRAFT` or `PENDING` order funds bookings
+with your API key just as a `PAID` one does:
+
+- `POST /bookings` with a `SINGLE_SESSION` item.
+- `POST /orders/{orderId}/package-bookings` with a `PACKAGE` item.
+- `POST /holds/{reservationId}/convert` with either.
+
+So booking before payment is your choice. If you book first, keep polling the
+order and decide what happens to one that never reaches `PAID`. See
+[Tracking state without webhooks](/concepts/tracking-state-without-webhooks#an-order-becomes-paid).
+
+**A signed-in client is the exception.** A client books their own package
+credits on the client plane only once the order is `PAID`. Until then the
+credit isn't listed, and booking it is `409 CREDIT_NOT_BOOKABLE`. See
+[Book a client's package credit](/guides/book-a-package-credit#only-a-listed-credit-books).
+
+Only `CANCELLED` stops booking. Every booking route answers a cancelled order
+with a `409`. The one exception is a retry of a package booking that
+succeeded before the cancel, with the same `idempotencyKey`: it replays the
+original result.
+
+```json
+{
+  "code": "ORDER_CANCELLED",
+  "message": "Order ord_01kx16f2a0h8a2my9u3f4tv0sp is CANCELLED",
+  "statusCode": 409,
+  "requestId": "8e3c6a1f-4b9d-4f52-a7e0-2d5b9c8f1a63"
+}
+```
+
+## Change the items
+
+Change an order's items **before any money is recorded against it**. The
+item routes don't check the order's status, and they don't settle the order.
+Only a payment or comp recording does, or MarketBox's nightly reconciliation:
+
+- On a `PAID` order, the total changes but the status stays `PAID`, and
+  `amountPaid` no longer matches.
+- On a part-paid order, removing an item can bring the total down to what's
+  already paid. The order stays unsettled until the next payment or comp, or
+  the nightly reconciliation. A card can't finish it: the payment page
+  refuses an order with nothing left to pay, `Order is already fully paid`.
+
+Each item route returns the whole order with its new totals.
+
+### Add an item
+
+`POST .../orders/{orderId}/items` adds a single-session line. The server
+prices it from the offering, against the region the order was created with:
+
+```json
+// POST /v1/projects/{projectId}/orders/{orderId}/items
+{
+  "skuType": "SINGLE_SESSION",
+  "serviceId": "srv_01kv60qg12e82acr78edfnjhvv",
+  "offeringId": "off_01kv60qg5r3m9t2x8bq7cn4dwe",
+  "quantity": 1
+}
+```
+
+**Add `PACKAGE` lines only when you create the order.** The add route takes
+no `packageId`, so it can't build a package line. Sending `skuType: "PACKAGE"`
+here fails with `500 INTERNAL_ERROR`, `An unexpected error occurred`. To sell
+another package, create a new order with the `PACKAGE` line in `items`. See
+[Selling a package](/resources/packages#selling-a-package).
+
+A service with no active rate for the line is `422 SERVICE_NOT_SOLD_AS`. See
+[Creating an order](/resources/orders#creating-an-order).
+
+### Change a quantity
+
+`PATCH .../orders/{orderId}/items/{orderItemId}` with `{ "quantity": 2 }`
+changes the quantity only. The unit price stays as it was when the line was
+added. To re-price a line, remove it and add it again.
+
+**Don't change a `PACKAGE` line's quantity.** On a package line, `quantity` is
+the number of sessions, and the PATCH re-prices the line as `unitPrice ×
+quantity`. For a package sold at a flat price, that total is wrong. Lowering
+it below the sessions already booked is accepted too: the bookings stay, and
+`quantityRemaining` becomes `0`.
+
+### Remove an item
+
+`DELETE .../orders/{orderId}/items/{orderItemId}` removes the line. Removing
+a `PACKAGE` line doesn't cancel the bookings already made from it. Check
+`GET .../orders/{orderId}/package-bookings?orderItemId=…` first, and keep the
+`bookingId`s: once the line is removed, that read is a `404`. Cancel the
+bookings if they should go too. See
+[Cancel or reschedule a booking](/guides/cancel-or-reschedule-a-booking).
+
+## Cancel an order
+
+Cancel an order the client genuinely called off. Send `cancellationReason`:
+
+```json
+// POST /v1/projects/{projectId}/orders/{orderId}/status
+{
+  "status": "CANCELLED",
+  "cancellationReason": "Client moved away before the first session"
+}
+```
+
+The reason is required. Without it, nothing is cancelled:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "cancellationReason: cancellationReason is required when status is CANCELLED",
+  "statusCode": 400,
+  "requestId": "4a9e2c7b-1f3d-4b68-a5e0-9c2d7f1b3e84"
+}
+```
+
+The order stores the reason as `cancellationReason`, and the user id of the
+account your key belongs to as `cancelledBy`.
+
+**Cancelling doesn't refund.** Money already recorded stays on the ledger,
+and `amountPaid` doesn't change. Refunds are made in the MarketBox dashboard.
+The public API has no refund route.
+
+**Cancelling is final.** No route reopens a `CANCELLED` order. To sell again,
+create a new order.
+
+### The bookings follow, a few seconds later
+
+The status call returns as soon as the order is `CANCELLED`. Its bookings are
+cancelled **afterwards**, by a cascade that usually finishes within seconds:
+
+- It cancels `SCHEDULED` and `STARTED` bookings whose end hasn't passed, and
+  returns their package sessions to the order item.
+- It leaves bookings that already happened alone: `AWAITING_CONFIRMATION`,
+  `DISPUTED` and settled ones.
+- It emails the client once, listing every cancelled session, and each
+  supplier once, listing theirs.
+
+So a booking you read straight after the call can still say `SCHEDULED`. To
+confirm the cascade finished, read each booking the order funded, a few
+seconds apart. For a package line,
+`GET .../orders/{orderId}/package-bookings?orderItemId=…` lists its bookings,
+one line per call. See
+[A cancelled order's bookings](/concepts/tracking-state-without-webhooks#a-cancelled-order’s-bookings).
+
+To cancel one session and keep the order, cancel the booking instead. See
+[Cancel a booking](/guides/cancel-or-reschedule-a-booking#cancel-a-booking).
+
+## Cancel or delete
+
+| | Cancel | Delete |
+| --- | --- | --- |
+| Use it for | An order that was genuinely called off. | An order raised in error. |
+| Call | `POST .../orders/{orderId}/status` with `CANCELLED` | `DELETE .../orders/{orderId}` |
+| Works when | The order isn't already `CANCELLED`. | The order holds no booking and no money. |
+| The order afterwards | `CANCELLED`, and listed. | `CANCELLED`, hidden from every list, and `404` on `GET`. Kept for audit. |
+| Response | `200` with the order. | `204`, no body. |
+
+**Delete refuses a real order.** An order is real once it holds a booking,
+booked or already delivered, or any `PENDING` or `SUCCEEDED` transaction: a
+payment, a refund, a comp or an adjustment.
+Deleting one is a `409`, and nothing changes:
+
+```json
+{
+  "code": "ORDER_NOT_DELETABLE",
+  "message": "Order ord_01kx16f2a0h8a2my9u3f4tv0sp has 2 booking(s) and 1 payment or refund record(s) against it, so it cannot be deleted. Cancel it instead (status CANCELLED).",
+  "statusCode": 409,
+  "requestId": "4c9e2a7b-1d3f-4b86-a0e5-7f2c8d1b6e93"
+}
+```
+
+Don't retry it. Cancel the order instead.
+
+A card payment the client started counts: opening the payment page writes a
+`PENDING` payment, so an order abandoned there can't be deleted. Cancel it.
+An order that never reached payment and booked nothing can be deleted. See
+[Abandoned checkout](/guides/client-checkout-end-to-end#abandoned-checkout).
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/v1/projects/{projectId}/orders/{orderId}` | `GET` | Read `status`, totals and `cancellationReason`. |
+| `/v1/projects/{projectId}/orders/{orderId}/status` | `POST` | Move between `DRAFT` and `PENDING`, or cancel. Never `PAID`. |
+| `/v1/projects/{projectId}/orders/{orderId}/items` | `POST` | Add a single-session line. |
+| `/v1/projects/{projectId}/orders/{orderId}/items/{orderItemId}` | `PATCH` | Change a line's quantity. |
+| `/v1/projects/{projectId}/orders/{orderId}/items/{orderItemId}` | `DELETE` | Remove a line. Its bookings stay. |
+| `/v1/projects/{projectId}/orders/{orderId}/package-bookings` | `GET` | List the bookings made from one package line. `orderItemId` is required. |
+| `/v1/projects/{projectId}/orders/{orderId}/transactions` | `POST` | Record cash, a transfer or a comp. Settles the order when it covers the total. |
+| `/v1/projects/{projectId}/orders/{orderId}` | `DELETE` | Remove an order raised in error. `204`. |
+
+### Errors and edge cases
+
+| Scenario | `code` | Status | Resolution |
+| --- | --- | --- | --- |
+| A move the order can't make, or to its own status | `BAD_REQUEST` | `400` | See the allowed moves above. |
+| `CANCELLED` with no `cancellationReason` | `VALIDATION_ERROR` | `400` | Send a reason. |
+| Asking for `PAID` | `ORDER_NOT_SETTLED` | `409` | Record the payment or a comp instead. |
+| The order changed under you | `VERSION_CONFLICT` | `409` | Re-read the order and decide again. |
+| Booking from a cancelled order | `ORDER_CANCELLED` | `409` | Don't retry. Create a new order. |
+| A client booking an unpaid package credit | `CREDIT_NOT_BOOKABLE` | `409` | Wait for `PAID`, or record the payment. |
+| A card payment on a `PAID` or `CANCELLED` order | `BAD_REQUEST` | `400` | Nothing to pay. |
+| Adding a `PACKAGE` line to an existing order | `INTERNAL_ERROR` | `500` | Create a new order with the `PACKAGE` line. |
+| Listing package bookings without `orderItemId`, or for a removed line | `VALIDATION_ERROR` / `NOT_FOUND` | `400` / `404` | Send the line's `orderItemId`, and read it before you remove the line. |
+| An item on a service with no active rate for it | `SERVICE_NOT_SOLD_AS` | `422` | Activate the rate in the MarketBox console. |
+| Deleting an order with a booking or money | `ORDER_NOT_DELETABLE` | `409` | Cancel it instead. |
+| A booking still reads `SCHEDULED` after the cancel | — | `200` | The cascade is asynchronous. Read again in a few seconds. |

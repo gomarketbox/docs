@@ -51,7 +51,8 @@ so. Poll the order:
 
 A cash, bank-transfer or comp payment you record with
 `POST /orders/{orderId}/transactions` settles in the same request. Its
-response is already the answer.
+response is already the answer. See
+[Record offline payments](/guides/record-offline-payments).
 
 <Warning>
 **If you converted a hold before `PAID`, reconcile.** Convert doesn't check
@@ -83,9 +84,11 @@ It can't cancel a booking whose end has passed, even one that still reads
 `AWAITING_CONFIRMATION` and waits for its outcome, like any session that
 happened.
 
-To confirm the cascade finished, read each booking the order funded. The
-`bookingId`s are the ones convert or `POST /bookings` returned. For a package,
-`GET /orders/{orderId}/package-bookings` lists them.
+To confirm the cascade finished, read each booking the order funded. For
+cancelling an order and the rest of its life after checkout, see
+[Order lifecycle after checkout](/guides/order-lifecycle-after-checkout). The
+`bookingId`s are the ones convert or `POST /bookings` returned. For a package
+line, `GET /orders/{orderId}/package-bookings?orderItemId=…` lists them.
 
 ## A hold lapses
 
