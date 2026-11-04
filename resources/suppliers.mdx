@@ -297,6 +297,9 @@ curl "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/suppliers/sup_01kv60q
   it straight to a browser: copy the fields your page renders.
 </Warning>
 
+To assemble a public profile from this response, see
+[Build a supplier profile page](/guides/build-a-supplier-profile-page).
+
 An **inactive** supplier is returned, with `active: false`, so a profile page
 for a paused supplier still renders. This differs from the list, which hides
 them. A `404` means the id is unknown in this project, belongs to another

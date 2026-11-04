@@ -82,7 +82,7 @@ There is no delete route. Archive a package to retire it.
 | `pricing` | Price rules for the **whole package**. See [Pricing](#pricing). |
 | `pricingModel` | Always `FLAT`. |
 | `validityDays` | How many days after purchase the sessions stay bookable. `null` means they never expire. |
-| `capacity` | Seats per session. Defaults to `1`. |
+| `capacity` | Seats per session. Defaults to `1`. Stored, but not applied yet: every package session is booked with `capacity: 1`. See [Group bookings and check-in](/guides/group-bookings-and-check-in#create-a-group-booking). |
 | `discountPercent` | Informational only. See [Pricing](#pricing). |
 | `status` | `DRAFT`, `ACTIVE` or `ARCHIVED`. |
 | `createdAt`, `updatedAt`, `createdBy`, `updatedBy` | Audit fields. |

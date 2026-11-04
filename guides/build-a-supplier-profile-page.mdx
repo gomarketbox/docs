@@ -1,0 +1,323 @@
+---
+title: Build a supplier profile page
+description: Assemble a public supplier profile on your server — name, photo, rating, services and the next opening — from GET /suppliers/{supplierId} and an availability search, without sending the supplier's contact details to the browser.
+---
+
+A supplier profile page shows one supplier to clients: who they are, how
+they're rated, what they offer and when they're next free. This guide builds
+it on your server, from two reads:
+
+- **`GET /suppliers/{supplierId}`** for the profile, photo, rating, services
+  and working pattern.
+- **`POST /availability/suppliers`** for the next time a client can book.
+
+Both take the API key alone, so both run on your server. Your server returns
+only the fields the page renders.
+
+## Read the supplier
+
+```bash Read one supplier
+curl "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/suppliers/sup_01kv60qgnef2kt3pvqgwmkbzfr" \
+  -H "x-api-key: $MARKETBOX_API_KEY"
+```
+
+The response is the whole supplier. This example is trimmed to the fields this
+guide uses:
+
+```json
+{
+  "data": {
+    "supplierId": "sup_01kv60qgnef2kt3pvqgwmkbzfr",
+    "firstName": "Jane",
+    "lastName": "Okonkwo",
+    "email": "jane@example.com",
+    "phone": "+14165550142",
+    "addressoneline": "120 Adelaide St W, Toronto, ON",
+    "city": "Toronto",
+    "bio": "Fifteen years of clinical massage therapy.",
+    "avatarUrl": "https://example.com/users/sup_01kv60qgnef2kt3pvqgwmkbzfr/avatar/0b7e9c2a-256.webp",
+    "languages": ["en", "fr"],
+    "active": true,
+    "services": [
+      { "serviceId": "srv_01kv60qg12e82acr78edfnjhvv", "name": { "en": "Deep tissue massage", "fr": "Massage des tissus profonds" } }
+    ],
+    "locations": [
+      { "locationId": "loc_01kv60qh3m7wznp8s0d2rk9abc", "locationType": "PHYSICAL", "name": "King West studio" }
+    ],
+    "rating": { "averageRating": 4.7, "reviewCount": 128, "recent": ["…"] },
+    "availability": {
+      "timezone": "America/Toronto",
+      "schedules": [
+        { "scheduleId": "sch_01kv60qgnef2kt3pvqgwmkbzfr", "summary": { "days": "Mon, Wed", "times": "9:00 AM – 5:00 PM" } }
+      ]
+    }
+  }
+}
+```
+
+For every field, see [Reading one supplier](/resources/suppliers#reading-one-supplier).
+
+<Warning>
+**The response carries the supplier's contact details.** It returns their
+`email`, `phone`, street address and coordinates, `externalId` and
+`externalData`. Each review in `rating.recent` carries the client's
+`clientId` and full name. Never pass the response to a browser. Copy only the
+fields your page renders, on your server.
+</Warning>
+
+### A supplier who can't be shown
+
+- **An unknown or deleted supplier is a `404`.** The same answer covers an id
+  from another project:
+
+  ```json
+  {
+    "code": "NOT_FOUND",
+    "message": "Supplier not found",
+    "statusCode": 404,
+    "requestId": "8f2c6a1e-3d7b-4e94-a5c0-1b9e7d3f6a52"
+  }
+  ```
+
+  Render your own "not found" page.
+- **An inactive supplier is returned,** with `active: false`. The page still
+  renders. Decide with the business whether to show a paused supplier, and
+  don't offer a time for one.
+- **`active: true` doesn't mean bookable.** A supplier with
+  `availability.schedules: []` has no working hours. Only an availability
+  search says when they're free. See
+  [Show the next opening](#show-the-next-opening).
+
+## Show the photo
+
+`avatarUrl` is one image: **256 × 256 pixels, WebP**, cropped to fill the
+square. It's `null` when the supplier has no photo, so render a placeholder.
+
+- **The API exposes only this one URL.** No field gives another size or
+  format. Display
+  it at up to 256 CSS pixels wide, or 128 on a high-density screen. Don't
+  build other sizes by editing the URL: its shape isn't part of the API.
+- **The URL changes when the photo changes.** The old photo's images are
+  deleted when a new one is attached, so a stored old URL breaks. Cache
+  `avatarUrl` no longer than you cache the rest of the profile.
+- **Removing the photo** sets `avatarUrl` to `null`.
+
+To upload a photo, see
+[Supplier portal: profile and photo](/guides/supplier-portal-profile-and-photo#change-the-photo)
+or [Provision your catalog and suppliers](/guides/provision-catalog-and-suppliers).
+
+## Show the rating
+
+The detail carries `rating`: `averageRating`, `reviewCount` and the 5 newest
+reviews in `recent`.
+
+- **Check `reviewCount` before you render stars.** An unreviewed supplier has
+  `averageRating: 0` and `reviewCount: 0`. Render "No reviews yet", not zero
+  stars.
+- **Strip the reviewers' details.** Show what the business agrees to, such as
+  the stars, the text and a first name.
+- **For the badge alone,** `GET /suppliers/{supplierId}/review-summary` returns
+  just `supplierId`, `averageRating` and `reviewCount`. Use it to refresh the rating without
+  re-reading the whole profile.
+
+See
+[A supplier profile page](/guides/collect-reviews-and-show-ratings#a-supplier-profile-page)
+for the rating block in full, and
+[Every review of a supplier](/guides/collect-reviews-and-show-ratings#every-review-of-a-supplier)
+to page through the rest.
+
+## List the services
+
+`services[]` lists what the supplier offers: each entry is a `serviceId` and a
+`name`.
+
+- **Only `LIVE` services appear.** A supplier mapped to a `DRAFT` or `INACTIVE`
+  service doesn't list it.
+- **`name` is keyed by language**, such as
+  `{ "en": "Deep tissue massage", "fr": "Massage des tissus profonds" }`. Pick
+  the client's language, and fall back to one the service has.
+- **There are no prices or durations.** Those live on the service's offerings.
+  Read them with
+  `GET /services/{serviceId}/offerings?status=ACTIVE`. Amounts are integer
+  minor units, so `4500` is $45.00, and the price can depend on where the
+  session happens. See [Offerings](/resources/services#offerings) and
+  [Regional pricing](/concepts/regional-pricing).
+
+The catalog changes rarely. Cache each service's offerings on your server, and
+refresh them when the business edits the catalog.
+
+### The working pattern
+
+`availability.schedules[]` is when and where the supplier works, such as
+"Mon, Wed, 9:00 AM – 5:00 PM" from each schedule's `summary`. Show it as
+working hours, not as free times: it ignores bookings and time off. See
+[Availability is a pattern, not a list of times](/resources/suppliers#availability-is-a-pattern-not-a-list-of-times).
+
+## Show the next opening
+
+No availability route takes a `supplierId` for one supplier's single sessions.
+`POST /availability/suppliers` returns every supplier who serves the service at
+the place you ask about, a page at a time.
+
+<Warning>
+**Sending `supplierId` to `POST /availability/suppliers` doesn't filter.** The
+field isn't in the request schema, so it's dropped without an error. You get
+the first page of every matching supplier, which may not include the one you
+asked about. Find the supplier by `data[].supplier.supplierId` instead.
+</Warning>
+
+To find one supplier's next opening, page through the results until their
+entry appears:
+
+```ts
+// lib/next-opening.ts — runs on your server only
+type NextOpening =
+  | { kind: 'open'; startUtc: string; startLocal: string }
+  | { kind: 'none-in-window' } // they serve it here, but nothing is free in the window
+  | { kind: 'not-offered' };   // they don't serve this offering at this place
+
+export async function nextOpening(args: {
+  supplierId: string;
+  serviceId: string;
+  offeringId: string;
+  locationId: string; // or send lat + lng instead, for a supplier who travels
+  timezone: string;
+}): Promise<NextOpening> {
+  let cursor: string | undefined;
+  do {
+    const res = await fetch(
+      `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/availability/suppliers`,
+      {
+        method: 'POST',
+        headers: {
+          'x-api-key': process.env.MARKETBOX_API_KEY!, // server-only
+          'content-type': 'application/json',
+          'x-mb-client-kind': 'server',
+        },
+        body: JSON.stringify({
+          serviceId: args.serviceId,
+          offeringId: args.offeringId,
+          locationId: args.locationId,
+          timezone: args.timezone,
+          lookAheadDays: 14,
+          limit: 50,
+          cursor,
+        }),
+      },
+    );
+    if (!res.ok) throw Object.assign(new Error('availability search failed'), { status: res.status });
+    const page = await res.json();
+    if (page.errors.length > 0) throw new Error(`degraded search: ${page.errors.join('; ')}`);
+
+    const entry = page.data.find((e: any) => e.supplier.supplierId === args.supplierId);
+    if (entry) {
+      const slot = entry.days[0]?.slots[0];
+      return slot
+        ? { kind: 'open', startUtc: slot.startUtc, startLocal: slot.startLocal }
+        : { kind: 'none-in-window' };
+    }
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+
+  return { kind: 'not-offered' };
+}
+```
+
+- **Choose the place.** The search needs a `locationId`, or `lat` and `lng`.
+  For a supplier who works at a venue, send the `locationId` of a `PHYSICAL`
+  entry in their `locations[]`. For one who travels to clients, send the
+  client's address as `lat` and `lng`. Without a client address, show the
+  working pattern instead of a time.
+- **`days: []` means nothing is free in the window.** The supplier serves the
+  offering there, but every slot is taken. Say "No times in the next two
+  weeks", or search again with a larger `lookAheadDays`.
+- **Not in any page usually means not offered here.** The supplier doesn't
+  serve that offering at that place, or isn't searchable right now, such as a
+  paused supplier.
+- **Check `errors` on each page.** A page can come back `200` with messages in
+  `errors`, when part of the search couldn't be computed. Treat a missing
+  supplier on such a page as unknown, not as "not offered".
+- **The time can be taken before the client books.** An open slot isn't a
+  hold. Re-check when the client picks it, or hold it. See
+  [Hold slots during checkout](/guides/hold-slots-for-checkout).
+
+Each page computes availability for up to 50 suppliers, so this is the slowest
+part of the page. Run it after the profile renders, or cache the answer on
+your server for a few minutes.
+
+Every page is also logged as a search for supplier insights, and every
+supplier on it with at least one open slot counts as appearing. The `x-mb-client-kind: server` header tags
+these lookups as your server's. See
+[Report site events](/guides/report-site-events). For the request fields and
+the response in full, see
+[Search suppliers by availability](/guides/search-suppliers-by-availability).
+
+<Note>
+For a package, `POST /availability/package-slate` and
+`POST /availability/package-options` do take a `supplierId`, and plan the
+package's sessions with that supplier only. See
+[Create a package booking](/guides/create-a-package-booking).
+</Note>
+
+## Put it together
+
+Build the public profile on your server, and return only this to the
+browser:
+
+```ts
+// lib/supplier-profile.ts — runs on your server only
+// `supplier` is `data` from GET /suppliers/{supplierId}
+export function toPublicProfile(supplier: SupplierDetail, language: string) {
+  const { averageRating, reviewCount, recent } = supplier.rating;
+  return {
+    supplierId: supplier.supplierId,
+    name: `${supplier.firstName} ${supplier.lastName?.[0] ?? ''}`.trim(),
+    bio: supplier.bio,
+    avatarUrl: supplier.avatarUrl, // null → placeholder
+    languages: supplier.languages,
+    rating: reviewCount > 0 ? { averageRating, reviewCount } : null, // null → "No reviews yet"
+    recentReviews: recent.map((review) => ({
+      ratingStars: review.ratingStars,
+      reviewText: review.reviewText,
+      createdAt: review.createdAt,
+    })),
+    services: supplier.services.map((service) => ({
+      serviceId: service.serviceId,
+      name: service.name[language] ?? Object.values(service.name)[0],
+    })),
+    workingPattern: supplier.availability.schedules.map((schedule) => schedule.summary),
+  };
+}
+```
+
+Showing a last initial, and leaving reviewers unnamed, are choices for this
+example, not API rules. Agree with the business what a public page shows.
+
+When the page loads in a browser, send a `profile_view` event, so the
+supplier's insights count the visit. See
+[Report site events](/guides/report-site-events#the-events).
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | What it does |
+| --- | --- | --- |
+| `/v1/projects/{projectId}/suppliers/{supplierId}` | `GET` | The profile, photo, rating, services and working pattern. |
+| `/v1/projects/{projectId}/suppliers/{supplierId}/review-summary` | `GET` | The rating alone. |
+| `/v1/projects/{projectId}/services/{serviceId}/offerings` | `GET` | Prices and durations for one service. |
+| `/v1/projects/{projectId}/availability/suppliers` | `POST` | Open slots for every supplier who serves the offering at a place. |
+
+### Errors and edge cases
+
+| Situation | Status and `code` | What to do |
+| --- | --- | --- |
+| Unknown, deleted or another project's supplier | `404 NOT_FOUND`, "Supplier not found" | Render your own "not found" page. |
+| The supplier is paused | `200`, `active: false` | Decide with the business whether to show them. Offer no times. |
+| No photo | `200`, `avatarUrl: null` | Render a placeholder. |
+| No reviews | `200`, `reviewCount: 0` | Render "No reviews yet". |
+| `supplierId` sent to `POST /availability/suppliers` | `200`, every matching supplier | It's ignored. Page through and match `supplier.supplierId`. |
+| Neither `locationId` nor `lat` and `lng` on the search | `400 VALIDATION_ERROR` | Send one form of the place. |
+| The supplier matches but nothing is free | `200`, their entry has `days: []` | Say there are no times in the window, or search a longer one. |
+
+See [Errors](/concepts/errors) for the envelope and every code.

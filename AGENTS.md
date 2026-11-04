@@ -67,9 +67,36 @@ Use it only when discussing the end-user auth plane.
   paths and IDs.
 - Show the failure, not just the happy path. When an endpoint has a common way to
   go wrong, document the error the caller will actually see and what it means.
-- Examples must use the real id prefixes: `prj_`, `srv_`, `off_`, `pkg_`, `bk_`,
-  `ord_`, `oi_`, `cli_`, `sup_`, `resv_`, `loc_`. A wrong prefix is worse than no
-  example — it gets copied verbatim and fails.
+- Examples must use the real id prefixes. A wrong prefix is worse than no
+  example — it gets copied verbatim and fails. The ids the public API issues:
+
+  | Prefix | Id |
+  | --- | --- |
+  | `prj_` | project |
+  | `srv_`, `off_`, `pkg_`, `bm_` | service, offering, package, business model |
+  | `cat_`, `attr_` | service category, attribute |
+  | `cli_`, `addr_` | client, saved address |
+  | `sup_`, `sch_`, `blk_`, `stz_` | supplier, schedule, blocked time, supplier travel zone |
+  | `loc_`, `skl_` | Location, skill |
+  | `ord_`, `oi_`, `alloc_`, `txn_` | order, order item, allocation, transaction |
+  | `bk_`, `bks_`, `note_` | booking, booking service line, booking note |
+  | `resv_` | hold (reservation) |
+  | `sugreq_`, `slate_`, `slot_` | suggestion request, slate, slot |
+  | `srch_` | search (`searchId`) |
+  | `rev_` | review — not `rv_` |
+  | `alr_` | supplier alert |
+
+  Most are typeids minted in `packages/db/src/id.ts` in mb-core. `srch_` comes
+  from `packages/types/src/search-log/`, and `addr_` is not a typeid: it's
+  `addr_` plus 24 hex characters, a fingerprint of the address. Offerings are
+  `off_`, never `offr_`. A supplier travel zone is `stz_`; a project-wide travel
+  zone is a Location, `loc_`. Don't use `cfg_`, `inv_`, `part_` or the other
+  internal prefixes in `id.ts` in examples. `slotId` on
+  `POST /availability/suppliers` is a bare UUID, not `slot_`.
+- `npm run check` validates example prefixes against `idPrefixes` in
+  `api-reference/docs-contract.json`. `srch_` and `addr_` are real but missing
+  from that list, so an example using them fails the check until mb-core adds
+  them.
 - Amounts are integer **minor units** (cents). `4500` is $45.00. Never write a
   decimal amount in a request example.
 

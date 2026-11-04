@@ -408,6 +408,10 @@ Group bookings (`capacity > 1`) support a participant list:
 - `DELETE .../bookings/{bookingId}/participants/{clientId}` — cancel
   the participant (soft-delete; capacity recovers).
 
+The booking's own client is registered when it's created, and registering a
+participant charges nothing. See
+[Group bookings and check-in](/guides/group-bookings-and-check-in).
+
 ## Notes
 
 Notes are attached at one of two scopes:
