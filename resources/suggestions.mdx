@@ -78,7 +78,9 @@ The ones you use most:
 
 `POST /v1/projects/{projectId}/suggestions/slots/{slotId}/reschedule` moves one
 slot of a stored slate to a time the client picked, before anything is booked.
-It's the "can we do Thursday instead?" step. It doesn't touch bookings: to
+It's the "can we do Thursday instead?" step. For the whole flow, from the
+client's pick to holding the adjusted slate, see
+[Let clients adjust a proposed slate](/guides/adjust-a-proposed-slate). It doesn't touch bookings: to
 move a booking, see
 [Cancel or reschedule a booking](/guides/cancel-or-reschedule-a-booking).
 

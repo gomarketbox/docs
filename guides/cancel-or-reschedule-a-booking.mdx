@@ -161,6 +161,9 @@ booking still emails everyone that it moved.
 A reschedule doesn't touch the order: the price, the order item and the
 package session stay as they were.
 
+To move a session of a package plan **before** it's booked, adjust the slate
+instead. See [Let clients adjust a proposed slate](/guides/adjust-a-proposed-slate).
+
 ### When a reschedule is refused
 
 Nothing is written when:
@@ -194,11 +197,12 @@ few seconds **later**, and their package sessions released. Only `SCHEDULED`
 and `STARTED` bookings whose session is still ahead are cancelled. Sessions
 that already happened are left alone. The client gets one email listing every
 cancelled session. See
-[A cancelled order's bookings](/concepts/tracking-state-without-webhooks#a-cancelled-orders-bookings).
+[A cancelled order's bookings](/concepts/tracking-state-without-webhooks#a-cancelled-order’s-bookings).
 
 A `CANCELLED` order is final, and nothing more can be booked from it: every
 route that creates a booking answers `409 ORDER_CANCELLED`. Cancelling doesn't refund the
-order.
+order. For everything else that happens to an order after it's placed, see
+[Order lifecycle after checkout](/guides/order-lifecycle-after-checkout).
 
 ## Cancel or delete?
 

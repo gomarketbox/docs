@@ -15,7 +15,8 @@ Money reaches the ledger two ways:
   See [Accept payments with Stripe](/guides/accept-payments-with-stripe).
 - **Cash, bank transfers and comps** are recorded by you, with
   `POST .../orders/{orderId}/transactions`. See
-  [Recording a transaction](#recording-a-transaction).
+  [Recording a transaction](#recording-a-transaction), and for the task end
+  to end, [Record offline payments](/guides/record-offline-payments).
 
 The ledger is append-only. A row is never edited. A correction is a new row
 that points at the one it corrects through `relatedTransactionId`.
