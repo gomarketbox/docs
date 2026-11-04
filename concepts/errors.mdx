@@ -108,13 +108,13 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | `CAPABILITY_NOT_GRANTED`                | 403    | Your API key lacks **Standard API access** (`*`): its capabilities are empty or name only site events. Checked before the project or the user token. A project admin grants it on the Application. See [Capabilities](/concepts/authentication#capabilities). |
 | `ACTING_ROLE_NOT_HELD`                  | 403    | An end-user request sent `X-MB-Acting-Role` naming a role the signed-in person doesn't hold. Drop the header. |
 | `MEMBERSHIP_INACTIVE`                   | 403    | `POST .../clients/me` (onboarding) for a person whose access the business removed. Nothing was read or linked. The client asks the business to invite them again. See [Build a booking flow](/guides/booking-flow-auth#onboard-the-client). |
-| `FIELD_NOT_SELF_EDITABLE`               | 403    | `PATCH .../suppliers/me` named a field only the business may change (`active`, `email`, `externalId`, `externalData`, `maxTravelTime`, `defaultLocale`). The whole body was refused. See [Build a supplier portal](/guides/build-a-supplier-portal#edit-the-profile). |
+| `FIELD_NOT_SELF_EDITABLE`               | 403    | `PATCH .../suppliers/me` named a field only the business may change (`active`, `email`, `externalId`, `externalData`, `maxTravelTime`, `defaultLocale`). The whole body was refused. See [Supplier portal: profile and photo](/guides/supplier-portal-profile-and-photo#edit-the-profile). |
 | `INSIGHTS_DISABLED`                     | 403    | The project has switched off this supplier insight (demand, or search). Hide the insight in your portal. |
 | `NOT_FOUND`                             | 404    | Resource doesn't exist or has been soft-deleted. Also returned for a `clientId` or `supplierId` in the request body that belongs to a different project — never a `403`, so a foreign id is indistinguishable from a missing one. |
 | `UNRESOLVED_SUBDIVISION`                | 400    | The address `state` isn't a recognised ISO 3166-2 subdivision of its country, and the offering or package prices by state or postal code there. `message` names the value and the subdivisions configured. Send the ISO code. See [Regional pricing](/concepts/regional-pricing#country-and-state-codes). |
 | `INVALID_ORDER_ITEM_REFERENCE`          | 400    | `POST .../bookings`: the service line's `orderItemId` isn't an item of its `orderId`. Check both ids. |
 | `REVIEW_ALREADY_EXISTS`                 | 409    | `POST .../bookings/{bookingId}/reviews`: the booking already has a review in that direction. Don't retry. |
-| `INVALID_CURSOR`                        | 400    | `GET .../suppliers/me/alerts` only: the `cursor` isn't one this list issued, or came from another `filter`. Request the first page again without it. See [Build a supplier portal](/guides/build-a-supplier-portal#alerts). |
+| `INVALID_CURSOR`                        | 400    | `GET .../suppliers/me/alerts` only: the `cursor` isn't one this list issued, or came from another `filter`. Request the first page again without it. See [Supplier portal: insights and alerts](/guides/supplier-portal-insights-and-alerts#alerts). |
 | `VERSION_CONFLICT`                      | 409    | Concurrent modification — re-read the resource and try again. Also a stale `version` on a supplier's schedule, blocked time or travel zone, or another write landing on one during its `DELETE`. |
 | `CONFLICT`                              | 409    | Generic write conflict covering situations like a booking that's already at capacity, or a client that's already registered as a participant on it. Also an `ACTIVE` schedule that overlaps another `ACTIVE` one, and `DELETE .../suppliers/{supplierId}` when the supplier's sign-in changed during the delete — try again. `message` names the specific problem. |
 | `SLOT_BOOKED`                           | 409    | The supplier's time is already taken by a confirmed booking. `conflicts[]` names the `bookingId`. Not retryable — search availability again. |
@@ -195,7 +195,7 @@ These come from the routes that plan or book from an order's credits:
 | `ORDER_CANCELLED`                 | 409    | The order is `CANCELLED`. Its sessions were cancelled and its credits released. Also refused when converting a hold that already converted. | Don't retry. Create a new order. |
 | `PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC` | 422 | `atomicity: "all_or_nothing"` (the default) books at most 15 sessions in one call. Nothing was booked. | Book fewer sessions per call (for example with `slotIds`), or send `atomicity: "best_effort"` if your project allows it. |
 | `BEST_EFFORT_NOT_ENABLED`         | 422    | You sent `atomicity: "best_effort"`, and your project doesn't allow partial package booking. Nothing was booked. | Use the default `all_or_nothing`, in calls of 15 sessions or fewer. |
-| `CREDIT_NOT_BOOKABLE`             | 409    | `POST /clients/me/orders/{orderId}/package-bookings` only: the credit isn't one `GET /clients/me/credits` would list — the order isn't `PAID`, or the credit is used up, expired or removed. | Re-read the client's credits and offer only those listed. See [Build a booking flow](/guides/booking-flow-auth#book-a-clients-own-credit). |
+| `CREDIT_NOT_BOOKABLE`             | 409    | `POST /clients/me/orders/{orderId}/package-bookings` only: the credit isn't one `GET /clients/me/credits` would list — the order isn't `PAID`, or the credit is used up, expired or removed. | Re-read the client's credits and offer only those listed. See [Book a client's package credit](/guides/book-a-package-credit#what-the-booking-call-checks). |
 
 A cancelled order comes back as:
 
@@ -212,7 +212,7 @@ A cancelled order comes back as:
 
 These come from the supplier plane's booking routes: cancel, reschedule and the
 attendance report. Full walkthrough in
-[Build a supplier portal](/guides/build-a-supplier-portal#when-a-change-is-refused).
+[Supplier portal: bookings](/guides/supplier-portal-bookings#when-a-change-is-refused).
 
 | `code`                           | Status | What it means                                                                 | What to do                                                   |
 | -------------------------------- | ------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------ |

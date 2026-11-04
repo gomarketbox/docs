@@ -325,7 +325,7 @@ The same request-shape rules as a package slate apply. `lookAheadStartDate`
 needs a numeric `±HH:MM` offset that matches the zone on that date — Toronto
 is `-05:00` in November, not `-04:00`. `timezone` must be an IANA name, and
 `rrule` must have a bounded `COUNT`. Each is a `400 VALIDATION_ERROR`. See
-[Build the slate](/guides/create-a-package-booking#build-the-slate).
+[Cadence rules](/guides/availability-and-slates#cadence-rules-rrule-and-lookaheadstartdate).
 </Warning>
 
 A successful plan returns `status: "OK"` and a `primarySlate`. Here the credit
@@ -508,7 +508,7 @@ re-read the credits and offer only those listed.
 A `slateId` or `slotIds` must come from a slate planned with this `orderId`
 and `orderItemId`. A slate planned from a `packageId`, or from another credit,
 is a `404` with the same body as an unknown id. Plan again from the credit
-(Step 3).
+(Step 3). Explicit `sessions` need no slate.
 
 ### When a slot goes stale
 

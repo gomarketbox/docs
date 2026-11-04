@@ -1,0 +1,169 @@
+---
+title: "Supplier portal: sign-in and access"
+description: What a supplier portal needs before its first call, the two credentials on every supplier-plane request, who may call the plane, every refusal, and where MarketBox emails send suppliers.
+---
+
+This page is part of [Build a supplier portal](/guides/build-a-supplier-portal).
+Every supplier-plane route lives under
+`/v1/projects/{projectId}/suppliers/me`.
+
+A supplier portal signs in exactly as a booking flow does. This page covers
+what is specific to suppliers. For creating an Application, hosted sign-in
+(PKCE) and the backend-for-frontend (BFF) pattern, see
+[Build a booking flow](/guides/booking-flow-auth).
+
+## Before you start
+
+- **An Application.** A project admin creates one on the **API Access** page of
+  the dashboard. It gives you an API key for your server and a `clientId` for
+  your sign-in page. The key needs **Standard API access**. See
+  [Capabilities](/concepts/authentication#capabilities).
+- **The supplier is a member of the project.** The business invites the
+  supplier from the dashboard, and the supplier accepts. That gives them an
+  `ACTIVE` membership with the `SUPPLIER` role, linked to their supplier record.
+  Your portal can't add a supplier to a project.
+- **One sign-in.** A supplier has one MarketBox sign-in. They sign in to your
+  portal with the account they accepted the invitation with.
+
+## Credentials and the token
+
+Every supplier-plane request carries two credentials:
+
+| Header | What it is |
+| --- | --- |
+| `x-api-key` | Your Application's API key. Your BFF adds it; the browser never holds it. |
+| `Authorization: Bearer <accessToken>` | The signed-in supplier's **access token** from your own sign-in. |
+
+**Send the access token your Application's own client issued.** That is the
+token from signing in with your Application's `clientId`. Don't send the ID
+token. Don't forward a token issued to another client — the MarketBox
+dashboard's, another Application's, or MarketBox's own booking flow.
+
+<Warning>
+Today a token from another client is logged and the request still goes through.
+Once enforcement is switched on, the same request is a `401 UNAUTHORIZED`. Send
+your own client's access token now, and nothing changes for you when it is
+switched on.
+</Warning>
+
+A request with the API key but no token is a `401`. A request with no API key,
+or with a publishable key in `x-api-key`, is a `401` too. **Read the `message`
+before you sign the supplier out.** "API key not provided" and "A publishable
+key cannot be used as an API key" mean your BFF sent the wrong key. Signing in
+again can't fix that, and a portal that tries loops. Sign the supplier in again
+only on a `401 HTTP_ERROR`. Treat any `401 UNAUTHORIZED` as a bug in your BFF
+and log it. See
+[End-user authentication](/concepts/end-user-authentication).
+
+## Who may call it
+
+Before a route runs, the API checks, in this order:
+
+1. Your API key, its capabilities and its project scope.
+2. The user token.
+3. The person's **membership** of the project.
+4. Their supplier record in this project.
+
+The membership is read on every request. A change the business makes in the
+dashboard applies to the supplier's next call.
+
+The person must hold an `ACTIVE` membership whose roles grant the route's
+permission. A supplier holds all four permissions:
+
+| Area | Permission |
+| --- | --- |
+| Profile and photo, hours, blocked time, travel zones, venues | `supplier:manageOwn` |
+| Bookings, attendance reports, cancel and reschedule | `booking:readOwn` |
+| Demand and search insights | `insights:readOwn` |
+| Alerts | `alert:readOwn` (every role holds it) |
+
+Everyone acts as a supplier here. A project admin or manager who also has a
+supplier record acts on **their own** record only, never on someone else's. A
+manager is refused on demand and search insights.
+
+### When access ends
+
+The business ends a supplier's access by removing their `SUPPLIER` role in the
+dashboard. Their next call is refused with `403` or `404`, depending on the
+route and any role they keep.
+
+Marking a supplier inactive does **not** end access. An inactive supplier isn't
+offered in search, but keeps everything they had, on your portal as on the
+dashboard.
+
+### Refusals
+
+Every refusal uses the standard [error envelope](/concepts/errors).
+
+| Status and `code` | What it means |
+| --- | --- |
+| `401 UNAUTHORIZED` | "API key not provided", or "A publishable key cannot be used as an API key". Your BFF sent no key, or a publishable one. Fix the BFF; don't sign the supplier out. |
+| `403 FORBIDDEN` | "API key not recognized". The `x-api-key` value isn't a MarketBox API key. |
+| `403 CAPABILITY_NOT_GRANTED` | Your API key lacks Standard API access. Checked before the token. |
+| `401 HTTP_ERROR` | No token, a malformed `Authorization` header, or a token that is invalid or expired. |
+| `401 UNAUTHORIZED` | A token that names no user — and, once enforced, a token from another client. |
+| `403 FORBIDDEN` | "User account not found. Complete registration first." The token is valid, but the person hasn't finished signing up to MarketBox. |
+| `403 FORBIDDEN` | The key can't use this project, or the person isn't an `ACTIVE` member holding the route's permission. An invited supplier who hasn't accepted yet gets "No active membership on this project". |
+| `403 ACTING_ROLE_NOT_HELD` | Your request sent `X-MB-Acting-Role` naming a role the person doesn't hold. A portal doesn't need that header. |
+| `404 NOT_FOUND` | No such project. |
+| `404 NOT_FOUND` | "No supplier record for current user". The person passed every check, but no supplier record in this project is linked to their sign-in — for example, a member who was invited without a supplier record. |
+
+A person who isn't an active member sees this:
+
+```json
+{
+  "code": "FORBIDDEN",
+  "message": "No active membership on this project",
+  "statusCode": 403,
+  "requestId": "4b1d7e2a-9c3f-4a58-b6e0-2f8d1c5a7e93"
+}
+```
+
+A member whose roles lack the permission sees the same `code` with
+`"message": "Insufficient permissions for this action"`.
+
+
+## Links in MarketBox emails
+
+By default, the emails MarketBox sends to suppliers link to the MarketBox
+dashboard. When the project has a **supplier portal URL**, the supplier emails
+below link to your portal instead. A project admin sets it in the dashboard,
+under **Settings › Notifications › Supplier portal**. It can't be set through
+the API.
+
+MarketBox adds two things to the URL at send time, and nothing else:
+
+- **`bookingId`.** When an email is about exactly one booking for the supplier
+  receiving it, it is added as a query parameter. A URL that already has a
+  query string keeps it. An email about several bookings, or a day's agenda,
+  gets no `bookingId`: link that to the schedule.
+- **`{supplierLocale}`** is replaced with the supplier's locale: their
+  `defaultLocale`, else their first `locales` entry, else the project's
+  `defaultLocale`, else `en-CA`.
+
+No project id, supplier id, email address or token is added. The link is only
+a pointer: your portal signs the supplier in and calls the supplier plane.
+
+The URL must be `https` (`http` only for `localhost` and `127.0.0.1`), at most
+2,048 characters, with no `#` fragment, no username or password, and no token
+other than `{supplierLocale}`.
+
+For example, take a portal URL ending in `/{supplierLocale}/schedule` and a
+supplier whose locale is `fr-CA`. An email about one booking links to the URL
+ending in `/fr-CA/schedule?bookingId=bk_01kx16f2a0e5x9jv6r0c1qs7pm`.
+
+| Email | With a portal URL |
+| --- | --- |
+| New booking | Your portal; `bookingId` when the email covers exactly one booking. |
+| Booking updated, to the current supplier | Your portal, with `bookingId`. |
+| Booking updated, to the previously assigned supplier | Your portal, without `bookingId`. |
+| Booking cancelled, to the supplier | Your portal, with `bookingId`. |
+| Booking cancelled, to the previously assigned supplier | Your portal, without `bookingId`. |
+| Order cancelled, to the supplier | Your portal; `bookingId` when the email covers exactly one booking. |
+| Daily agenda | Your portal. |
+| Rate your client, and its follow-ups | Unchanged: the project's review URL, or MarketBox's review page. |
+| Invitation | Unchanged: the dashboard. |
+
+A supplier taken off a booking gets no `bookingId`, because the plane returns a
+booking only to its current supplier. Client emails and staff copies are
+unchanged. See [Emails](/concepts/emails#links-in-supplier-emails).

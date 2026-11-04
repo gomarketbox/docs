@@ -1,0 +1,159 @@
+---
+title: "Supplier portal: bookings"
+description: Show a signed-in supplier their bookings, let them file attendance reports and rate the client, and cancel or move a booking when the service allows it.
+---
+
+This page is part of [Build a supplier portal](/guides/build-a-supplier-portal).
+Paths are relative to `/v1/projects/{projectId}/suppliers/me`. Every call
+takes your API key and the supplier's access token. See
+[Sign-in and access](/guides/supplier-portal-sign-in-and-access).
+
+## Bookings and the attendance report
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | `/bookings` | The supplier's bookings in a window. |
+| `GET` | `/bookings/{bookingId}` | One booking, with its services and participants. |
+| `GET` | `/bookings/{bookingId}/reports` | Whether a report can be filed now, and the supplier's report. |
+| `POST` | `/bookings/{bookingId}/reports` | Files the supplier's attendance report. |
+
+The client is shown as the service's settings allow the supplier to see them —
+for example, a last initial instead of a last name, and no email or phone.
+Booking notes and the client's own report are never returned.
+
+This section is the summary. For the agenda's window and `expand` rules,
+`viewerActions`, every report outcome and refusal, and overdue reports, see
+[Supplier day view and attendance reports](/guides/supplier-day-view-and-reporting).
+
+### The day's agenda
+
+1. List the window:
+
+   ```
+   GET /v1/projects/{projectId}/suppliers/me/bookings?startDate=2026-10-20T04:00:00.000Z&endDate=2026-10-21T04:00:00.000Z&expand=client,services,location,participants,myReport
+   ```
+
+   The list isn't paginated, so keep the window short — a day or a week. Every
+   `expand` value except `client` needs both dates, at most 93 days apart.
+2. Read `viewerActions` on each row: `canCancel`, `canReschedule`, and
+   `blockedReason` when an action is blocked. The server computes them; use them
+   to show or hide the cancel and move buttons.
+3. `GET /bookings/{bookingId}` for the detail.
+
+### File the report
+
+After the booking ends, `GET /bookings/{bookingId}/reports`. `reportable` says
+whether a report may be filed now. `ifAttended` and `ifNotAttended` say which
+status each answer would move the booking to. They are judged from the booking
+alone, so an `ifAttended` of `COMPLETED` can still end `DISPUTED`.
+
+Then `POST /bookings/{bookingId}/reports`:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/bookings/{bookingId}/reports
+{
+  "attended": true,
+  "note": "Lesson ran to the full hour."
+}
+```
+
+`attended` says whether **the supplier** attended. Filing settles the booking
+as the dashboard does: attended → `COMPLETED`, not attended →
+`SUPPLIER_NO_SHOW`. Attended becomes `DISPUTED` instead when the client has
+already reported that they didn't attend. No read tells the supplier what the
+client said, and the report's response carries no booking status. To show
+the outcome, re-read the booking with `GET /bookings/{bookingId}` rather than
+predicting it. See
+[Attendance and disputes](/resources/bookings#attendance-and-disputes).
+
+| Status and `code` | What it means |
+| --- | --- |
+| `201` | Filed. |
+| `200` | The same answer was already on file. |
+| `409 REPORT_ALREADY_EXISTS` | A different answer is already on file. |
+| `409 BOOKING_ALREADY_SETTLED` | The booking is already settled. |
+| `422 BOOKING_NOT_REPORTABLE` | The booking is cancelled, or hasn't ended yet. |
+
+### Rate the client
+
+The supplier plane has no review route. To let a supplier rate a client, your
+server checks the booking is theirs with
+`GET /suppliers/me/bookings/{bookingId}`, then posts a `SUPPLIER_TO_CLIENT`
+review with the API key. Don't check with the API-key
+`GET /bookings/{bookingId}`: it returns any booking in the project. See
+[Collect reviews and show ratings](/guides/collect-reviews-and-show-ratings#check-the-reviewer-is-on-the-booking).
+
+## Cancel and reschedule
+
+| Method | Path | Body |
+| --- | --- | --- |
+| `POST` | `/bookings/{bookingId}/cancel` | `reasonCode`, optional `note` |
+| `PATCH` | `/bookings/{bookingId}` | `startTime`, a UTC instant |
+
+Both return `200` with the updated booking, and email the client and the
+business. Your portal never refunds. A cancelled package session goes back on
+the package.
+
+**Whether a supplier may do either is the service's setting.** The business sets
+it per service in [`participantSettings`](/concepts/booking-engine-model#participant-settings):
+may suppliers cancel, may they reschedule, and the notice window for each.
+There's no separate permission for it.
+
+### Move a booking
+
+1. Read `viewerActions.canReschedule` on the booking. When it's `false`, show
+   `blockedReason` if there is one; otherwise say the business handles changes.
+2. Send the new start:
+
+   ```json
+   // PATCH /v1/projects/{projectId}/suppliers/me/bookings/{bookingId}
+   {
+     "startTime": "2026-10-23T14:00:00.000Z"
+   }
+   ```
+
+3. On `409 SLOT_UNAVAILABLE`, offer another time. On `409 VERSION_CONFLICT`,
+   re-read the booking and try again.
+
+A move changes the time only. The length, supplier, location and zone stay.
+
+### Cancel a booking
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/bookings/{bookingId}/cancel
+{
+  "reasonCode": "SUPPLIER_UNAVAILABLE",
+  "note": "Pool closed for maintenance that morning."
+}
+```
+
+`reasonCode` is one of `CLIENT_REQUESTED`, `CLIENT_UNWELL`,
+`SUPPLIER_UNAVAILABLE`, `WEATHER`, `FACILITY_UNAVAILABLE`, `BOOKED_IN_ERROR` or
+`OTHER`. The `note` stays on the booking's history and is never emailed.
+
+### When a change is refused
+
+| Status and `code` | What it means |
+| --- | --- |
+| `404 NOT_FOUND` | Not their booking, or no such booking. The two are identical. |
+| `403 PARTICIPANT_ACTION_DISABLED` | The service doesn't let suppliers cancel (or move) bookings. The supplier contacts the business. |
+| `409 BOOKING_NOT_SCHEDULED` | The booking is no longer `SCHEDULED` — already cancelled, completed and so on. |
+| `409 NOTICE_WINDOW_PASSED` | Too close to the start to change. |
+| `409 VERSION_CONFLICT` | The booking changed since you read it. Re-read and try again. |
+| `409 OCCUPANCY_CONTENTION` | Move only: the supplier's calendar is under heavy concurrent writes. Retry after a short backoff. |
+| `422 NEW_START_INSIDE_NOTICE_WINDOW` | Move only: the new time is itself inside the notice window. |
+| `409 SLOT_UNAVAILABLE` | Move only: the new time is outside working hours, in blocked time, or overlaps another booking or a hold. When the availability check finds the cause, the `message` names it — for example "That time is not available: it is during time the supplier has blocked off." Time a hold has taken, or a booking made a moment earlier, reads "That time is not available. Choose another." |
+| `409 SLOT_UNVERIFIABLE` | Move only: availability couldn't be checked, so nothing changed. |
+| `400 VALIDATION_ERROR` | An unknown `reasonCode`, or a `startTime` that isn't an instant. |
+| `400 BAD_REQUEST` | Cancel: the booking's status changed while the cancel ran, so the change is no longer allowed. Move: the booking's stored zone isn't a valid IANA zone. Re-read the booking. |
+
+For example, a move on a service that doesn't allow it:
+
+```json
+{
+  "code": "PARTICIPANT_ACTION_DISABLED",
+  "message": "This service does not let suppliers reschedule bookings",
+  "statusCode": 403,
+  "requestId": "7e3a9c1d-2f5b-4d86-8a0e-6c4b2d9f1e57"
+}
+```

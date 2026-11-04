@@ -374,61 +374,10 @@ The signed-in client can book sessions from their own credit:
 POST /v1/projects/{projectId}/clients/me/orders/{orderId}/package-bookings
 ```
 
-It takes the same two credentials as the other `/clients/me` routes. The body,
-the `201` response and the refusals are the same as the API-key route,
-`POST /orders/{orderId}/package-bookings`. See
-[Create a package booking](/guides/create-a-package-booking#what-a-booking-call-checks).
-The difference is who books: the bookings record the client as the person who
-made them.
-
-1. **Plan from the credit.** Your BFF calls `POST /availability/package-slate`
-   with the credit's `orderId` and `orderItemId`, and the client's `clientId`
-   so MarketBox refuses an order that isn't theirs. See
-   [Book the sessions left on a credit](/guides/create-a-package-booking#book-the-sessions-left-on-a-credit).
-2. **Book it.** Forward the client's token with
-   `{ orderItemId, idempotencyKey, slateId }` to the route above.
-
-This route adds three refusals of its own:
-
-- **Another client's order is a `404`.** It is the same body as an order that
-  doesn't exist, so an id can't be used to probe someone else's order:
-
-  ```json
-  {
-    "code": "NOT_FOUND",
-    "message": "Order ord_01kx16f0a1c7b2sd91xzq3mn5p not found",
-    "statusCode": 404,
-    "requestId": "7f2b5d38-9a1e-4c64-b8d3-1e6a4c9f2b57"
-  }
-  ```
-
-- **Only a credit that `GET /clients/me/credits` would list can be booked.**
-  Any other is `409 CREDIT_NOT_BOOKABLE`: an order that isn't `PAID`, a credit
-  that is used up or has expired, a removed line, or a line that isn't a
-  package.
-
-  ```json
-  {
-    "code": "CREDIT_NOT_BOOKABLE",
-    "message": "This credit is not available to book",
-    "statusCode": 409,
-    "requestId": "3c9a7e14-2b6d-4f80-a5c1-6d8e2f4b9a73"
-  }
-  ```
-
-  A `CANCELLED` order gets `409 ORDER_CANCELLED` instead, as on the API-key
-  route.
-
-- **A `slateId` or `slotIds` must come from a slate planned from this
-  credit**, with this `orderId` and `orderItemId`. A slate planned from a
-  `packageId`, or from another credit, is a `404` with the same body as an
-  unknown id. Explicit `sessions` need no slate.
-
-A retry with the same `idempotencyKey` replays the first result, on either
-route. See [Retry safely](/guides/create-a-package-booking#retry-safely-with-idempotencykey).
-
-For the whole flow, step by step, see
-[Book a client's package credit](/guides/book-a-package-credit).
+It takes the same two credentials as the other `/clients/me` routes, and the
+bookings record the client as the person who made them. For the whole flow —
+planning a slate from the credit, booking it, and the refusals this route adds —
+see [Book a client's package credit](/guides/book-a-package-credit).
 
 ## Reference
 

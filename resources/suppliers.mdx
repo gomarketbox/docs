@@ -20,7 +20,7 @@ not pay for data a directory does not show.
 Both answer for **your application**, with the API key alone. A supplier
 managing their own profile, bookings and hours through your portal uses the
 **supplier plane** instead — `/v1/projects/{projectId}/suppliers/me`, with the
-supplier's user token. See [The supplier's own view](#the-suppliers-own-view).
+supplier's user token. See [The supplier's own view](#the-supplier’s-own-view).
 
 ## Booking identity
 
@@ -379,7 +379,7 @@ suppliers share (`PROJECT_LOCATION`, a `loc_` id). Search finds a supplier in
 either kind of zone, but only a supplier's own zone can be booked at a client's
 address: a `TRAVEL_ZONE` booking's `locationId` must be an `stz_` id, and a
 `loc_` id is `404 NOT_FOUND`. See
-[Set up a mobile supplier's service area](/guides/set-up-a-mobile-supplier-service-area#the-suppliers-own-zone-or-a-project-zone).
+[Set up a mobile supplier's service area](/guides/set-up-a-mobile-supplier-service-area#the-supplier’s-own-zone-or-a-project-zone).
 
 Only **live** schedules are returned — `ACTIVE`, not deleted, and `endDate` not
 yet passed in the schedule's own `timezone`. `schedules: []` means the supplier
@@ -520,7 +520,7 @@ Schedules are **not** writable with the API key alone. A supplier created here
 has no schedule, so `availability.schedules` is `[]` and they cannot be booked
 until working hours are set — by an operator in the dashboard, or by the
 supplier themselves through your portal, on the
-[supplier plane](/guides/build-a-supplier-portal#hours-and-blocked-time).
+[supplier plane](/guides/supplier-portal-availability#hours-and-blocked-time).
 
 ## The supplier's own view
 

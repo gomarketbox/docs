@@ -12,12 +12,13 @@ grep finds the rest.
 | `/orders…`, order items, order status | `resources/orders.mdx` (lifecycle, creating, listing, settling, endpoint index), `concepts/service-fees.mdx`, `concepts/regional-pricing.mdx` when pricing changes |
 | `/transactions`, `/payment-intent`, settlement, card saving | `guides/accept-payments-with-stripe.mdx`, `resources/orders.mdx#settling-an-order` |
 | `/clients/me…` (onboarding, profile, credits, addresses) | `guides/booking-flow-auth.mdx`, `concepts/end-user-authentication.mdx`, `guides/accept-payments-with-stripe.mdx` (client profile shape) |
-| Addresses, `locationType`, travel zones, coordinates | `guides/booking-addresses.mdx`, `guides/hold-slots-for-checkout.mdx` |
+| Addresses, `locationType`, travel zones, coordinates | `snippets/location-rules.mdx` (which location fields each `locationType` needs), `guides/booking-addresses.mdx`, `guides/hold-slots-for-checkout.mdx` |
 | `/availability/search`, `/time-slots`, `/availability/suppliers` | `resources/availability.mdx`, `guides/search-suppliers-by-availability.mdx` |
-| `/availability/package-slate`, `/package-options`, slates, cadence | `guides/availability-and-slates.mdx`, `guides/create-a-package-booking.mdx`, `guides/show-a-package-storefront.mdx` |
+| `/availability/package-slate`, `/package-options`, slates, cadence | `resources/suggestions.mdx` (every slate, slot and response field), `guides/availability-and-slates.mdx`, `guides/create-a-package-booking.mdx`, `guides/show-a-package-storefront.mdx` |
 | `/orders/{orderId}/package-bookings`, package credits | `guides/create-a-package-booking.mdx`, `resources/orders.mdx` |
 | `/holds…`, occupancy conflicts (`SLOT_HELD`, `SLOT_BOOKED`) | `guides/hold-slots-for-checkout.mdx`, `concepts/concurrency.mdx` |
 | `/suppliers…` | `resources/suppliers.mdx` (fields, write rules, listing, endpoint index) |
+| `/suppliers/me…` (the supplier plane) | `guides/build-a-supplier-portal.mdx` (hub, endpoint index) and the `guides/supplier-portal-*.mdx` page for the area: sign-in and access, profile and photo, bookings, availability, insights and alerts |
 | `/reviews…`, review links | `resources/reviews.mdx`, `concepts/emails.mdx` |
 | Emails a route sends | `concepts/emails.mdx` |
 | Timezone fields, local/UTC times | `concepts/timezones.mdx`, `resources/availability.mdx#slot-times-and-zones` |

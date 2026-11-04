@@ -1,0 +1,248 @@
+---
+title: "Supplier portal: availability"
+description: Let a signed-in supplier set their working hours, block time off, skip dates with exdates, and choose the travel zones and venues they work in.
+---
+
+This page is part of [Build a supplier portal](/guides/build-a-supplier-portal).
+It holds the field rules for a schedule, a blocked time and a travel zone.
+Paths are relative to `/v1/projects/{projectId}/suppliers/me`. Every call
+takes your API key and the supplier's access token. See
+[Sign-in and access](/guides/supplier-portal-sign-in-and-access).
+
+## Hours and blocked time
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET`, `POST` | `/schedules` | List and create working hours. |
+| `GET`, `PATCH`, `DELETE` | `/schedules/{scheduleId}` | Read, change (send `version`), delete (`204`). |
+| `POST` | `/schedules/{scheduleId}/clone` | A copy, created `INACTIVE` for editing. |
+| `GET`, `POST` | `/blocked-times` | List and create blocked time. |
+| `GET`, `PATCH`, `DELETE` | `/blocked-times/{blockedTimeId}` | Read, change (send `version`), delete (`204`). |
+| `POST` | `/availability-timezone/apply-profile` | Moves every schedule and blocked time into the profile zone, keeping wall-clock times. |
+
+Lists return `ACTIVE` rows. Add `includeInactive=true` or `includeDeleted=true`
+for the others.
+
+This section has the field rules. For how `rrule` is read, holidays and time
+off, seasonal schedules, a timezone move and checking the result, see
+[Weekly hours, exceptions and seasons](/guides/weekly-hours-exceptions-and-seasons).
+
+### Set working hours
+
+1. `GET /suppliers/me/locations` for the venue picker. For the area picker,
+   `GET /suppliers/me/travel-zones` lists the supplier's own travel zones, and
+   the key-only `GET /v1/projects/{projectId}/locations?locationType=TRAVEL_ZONE`
+   lists the project's. `GET /suppliers/me/locations` never returns
+   `TRAVEL_ZONE` locations, so a portal needs that key-only call too.
+2. Create the schedule. This one is for a venue:
+
+   ```json
+   // POST /v1/projects/{projectId}/suppliers/me/schedules
+   {
+     "startDate": "2026-11-02",
+     "endDate": "2027-06-30",
+     "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,WE",
+     "weeklyTimeRanges": [
+       { "dayOfWeek": "MO", "startTime": "09:00", "endTime": "17:00", "crossesMidnight": false, "sortOrder": 0 },
+       { "dayOfWeek": "WE", "startTime": "12:00", "endTime": "20:00", "crossesMidnight": false, "sortOrder": 1 }
+     ],
+     "appliesToAllOfferings": true,
+     "locationRefs": [
+       { "locationId": "loc_01kv60qg4h2n7r9t3w5x8y6zab", "locationType": "PHYSICAL" }
+     ]
+   }
+   ```
+
+   Name each venue with both its `locationId` and its `locationType` from
+   `GET /suppliers/me/locations`.
+
+   For an area, send `travelZoneRef` instead of, or as well as,
+   `locationRefs`. This schedule covers one of the supplier's own zones, for
+   one offering only:
+
+   ```json
+   // POST /v1/projects/{projectId}/suppliers/me/schedules
+   {
+     "startDate": "2026-11-03",
+     "endDate": "2027-06-30",
+     "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=TU,TH",
+     "exdates": ["2026-12-24"],
+     "weeklyTimeRanges": [
+       { "dayOfWeek": "TU", "startTime": "08:00", "endTime": "14:00", "crossesMidnight": false, "sortOrder": 0 },
+       { "dayOfWeek": "TH", "startTime": "08:00", "endTime": "14:00", "crossesMidnight": false, "sortOrder": 0 }
+     ],
+     "appliesToAllOfferings": false,
+     "serviceOfferingIds": ["off_01kv60qge5eh59ap0gw0pqrrys"],
+     "travelZoneRef": {
+       "travelZoneSource": "SUPPLIER_TRAVEL_ZONE",
+       "supplierTravelZoneId": "stz_01kv60qgnef2kt3pvqgwmkbzfr"
+     }
+   }
+   ```
+
+   `travelZoneRef` names one zone, in one of two shapes:
+
+   | Zone | Where its id comes from | `travelZoneRef` |
+   | --- | --- | --- |
+   | The supplier's own | `GET /suppliers/me/travel-zones` | `{ "travelZoneSource": "SUPPLIER_TRAVEL_ZONE", "supplierTravelZoneId": "stz_…" }` |
+   | The project's | `GET /locations?locationType=TRAVEL_ZONE`, with the API key alone | `{ "travelZoneSource": "PROJECT_LOCATION", "travelZoneLocationId": "loc_…" }` |
+
+   **A travel zone on its own makes no one bookable.** The supplier is offered
+   in an area only once an `ACTIVE` schedule references its zone.
+
+   **Use the supplier's own zone for in-home work.** Search offers a supplier
+   in a project zone, but a booking at a client's address needs the
+   supplier's own `stz_` id. A `loc_` project zone in its `locationId` is a
+   `404 NOT_FOUND`. See
+   [The supplier's own zone or a project zone](/guides/set-up-a-mobile-supplier-service-area#the-supplier’s-own-zone-or-a-project-zone).
+3. To change it, `PATCH /schedules/{scheduleId}` with the changed fields and the
+   row's current `version`.
+
+Before a schedule is saved, the API checks it. Each check below that fails is a
+`400`:
+
+- `rrule` is `FREQ=WEEKLY`, with no `DTSTART`. `INTERVAL`, `BYDAY` and `UNTIL`
+  are read. With no `BYDAY`, every day is allowed, so each range applies on
+  its own `dayOfWeek`. To skip single dates, such as a public holiday, list
+  them in `exdates` as `YYYY-MM-DD`.
+- In each range, `startTime` and `endTime` differ, and `crossesMidnight` is
+  `true` exactly when `startTime` is later than `endTime`: a range that ends
+  the next day.
+- `appliesToAllOfferings: true` takes no `serviceOfferingIds`.
+  `appliesToAllOfferings: false` needs at least one.
+- Each of `serviceOfferingIds` is an `ACTIVE` offering of one of the
+  supplier's own services, the ones in their profile `serviceIds`. Anything
+  else is `400 BAD_REQUEST` naming the ids, such as
+  "Offerings not active for this supplier: off_01kv60qge5eh59ap0gw0pqrrys".
+- A schedule has at least one entry in `locationRefs`, a `travelZoneRef`, or
+  both.
+- Each venue and zone exists in the project, with the type you named.
+
+Two `409` cases to handle. Branch on `code`, because the status is the same:
+
+- `CONFLICT`: an `ACTIVE` schedule may not overlap another `ACTIVE` one.
+  Change the dates or hours.
+- `VERSION_CONFLICT`: the row changed since you read it, such as "Schedule
+  was modified by another writer". Re-read the row and try again. A `DELETE`
+  can also get it, when another write lands on the row at the same moment.
+
+Blocked time and travel zones answer a stale `version` the same way, with
+`409 VERSION_CONFLICT`.
+
+Deleting a schedule whose `travelZoneRef` names one of the supplier's own zones
+(`SUPPLIER_TRAVEL_ZONE`) soft-deletes that zone too.
+
+### Block time off
+
+Blocked time has the same date, `rrule` and `exdates` rules as a schedule. In
+place of `weeklyTimeRanges` it takes `allDay` or `timeRanges`, plus an optional
+`notes`. A range in `timeRanges` with no `dayOfWeek` applies on every day the
+rule allows.
+
+A single day off still needs a weekly rule. Give the day as both `startDate`
+and `endDate`, and leave out `BYDAY`:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/blocked-times
+{
+  "startDate": "2026-12-24",
+  "endDate": "2026-12-24",
+  "rrule": "FREQ=WEEKLY;INTERVAL=1",
+  "allDay": true,
+  "notes": "Vacation"
+}
+```
+
+`allDay: true` takes an empty or absent `timeRanges`. `allDay: false` needs at
+least one range. A lunch break every weekday, except on one holiday:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/blocked-times
+{
+  "startDate": "2026-11-02",
+  "endDate": "2027-06-30",
+  "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR",
+  "exdates": ["2026-12-25"],
+  "allDay": false,
+  "timeRanges": [
+    { "startTime": "12:00", "endTime": "13:00", "crossesMidnight": false, "sortOrder": 0 }
+  ],
+  "notes": "Lunch"
+}
+```
+
+Any other `FREQ`, or a rule with `DTSTART`, is refused:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "rrule: rrule must be FREQ=WEEKLY without DTSTART (e.g. FREQ=WEEKLY;INTERVAL=1;BYDAY=MO)",
+  "statusCode": 400,
+  "requestId": "9d2e6b4a-3c1f-4e87-a5b0-7f1c8d3e2a96"
+}
+```
+
+### After a timezone change
+
+When a supplier changes their profile `timezone`, their rows stay in the old
+zone. `POST /availability-timezone/apply-profile` moves every schedule and
+blocked time into the profile zone, keeping wall-clock times. For its
+response, the zone it picks, the rows it skips and the bookings it leaves
+where they are, see
+[When the supplier's timezone moves](/guides/weekly-hours-exceptions-and-seasons#when-the-supplier’s-timezone-moves).
+
+## Travel zones
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET`, `POST` | `/travel-zones` | List (`includeInactive`, `includeDeleted`, `namePrefix`) and create. |
+| `GET`, `PATCH`, `DELETE` | `/travel-zones/{travelZoneId}` | Read, change (send `version`), delete (`204`, a soft delete). |
+
+A travel zone is either a circle around a centre or a drawn area:
+
+```json
+// POST /v1/projects/{projectId}/suppliers/me/travel-zones
+{
+  "name": "Downtown Toronto",
+  "latitude": 43.6532,
+  "longitude": -79.3832,
+  "travelZoneType": "CIRCULAR",
+  "travelDistance": 8,
+  "travelDistanceUnit": "KM"
+}
+```
+
+For a `DRAWN` zone, send `travelRegions` (a GeoJSON `Polygon` or
+`MultiPolygon`) instead of the distance.
+
+A zone does nothing until a schedule names it in `travelZoneRef`. See
+[Set working hours](#set-working-hours). For the whole setup in order, and how
+to check a client's address is covered, see
+[Set up a mobile supplier's service area](/guides/set-up-a-mobile-supplier-service-area).
+
+To change a zone, `PATCH` it with the changes and its current `version`. A stale
+`version` is `409 VERSION_CONFLICT`: re-read the zone and try again. `DELETE`
+takes no `version`. Its `409 VERSION_CONFLICT` means another write to the zone
+landed at the same moment: re-read the zone, then decide again.
+
+**A geometry change moves your schedules' versions.** When the geometry changes,
+every schedule that uses the zone is recomputed and rewritten. The response
+carries `coverageRecompute: { total, failed }`. Re-read any schedule you cached
+before you next `PATCH` it. A `failed` schedule keeps its old coverage until
+it's next saved. A rename leaves schedules alone, and the response has no
+`coverageRecompute`.
+
+## Venues
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | `/suppliers/me/locations` | The venues a supplier can name in a schedule. |
+| `GET` | `/v1/projects/{projectId}/locations/{locationId}` | One location, with the API key alone. |
+
+`GET /suppliers/me/locations` returns the project's active `PHYSICAL` and
+`VIRTUAL` locations, sorted by name, in one response. It has no travel
+settings.
+
+To show where a booking takes place, look up its `locationId` with the key-only
+[`GET /locations/{locationId}`](/resources/locations). It returns inactive
+locations too, so a booking at a venue that has since closed still resolves.

@@ -3,6 +3,8 @@ title: Hold slots during checkout
 description: Reserve a supplier's time while a client pays — hold a single session or a whole package slate, then convert the hold into bookings.
 ---
 
+import LocationRules from '/snippets/location-rules.mdx';
+
 A **hold** is a claim on a supplier's time. It blocks that time for
 everyone else — nobody can book it, hold it, or even see it as available —
 until you either convert the hold into real bookings or it lapses. It is
@@ -108,15 +110,10 @@ it. That isn't ceremony: convert rebuilds the booking from the
 while your client was paying), so whatever the booking will need, the
 hold has to be holding already.
 
-| `locationType` | Required alongside it | Must be omitted / null |
-| --- | --- | --- |
-| `VIRTUAL` | nothing | `locationId`, `latitude`, `longitude` |
-| `PHYSICAL` | `locationId` — a **Location** id (`loc_…`) | `latitude`, `longitude` (derived from the Location record) |
-| `TRAVEL_ZONE` | `locationId` — the **`supplierTravelZoneId`** (`stz_…`) — plus `latitude`, `longitude` and a structured `address` | — |
+<LocationRules />
 
-These are the rules on `POST /bookings`, unchanged — see the location table
-in [Create a single booking](/guides/create-a-single-booking#reference) and
-the `address` shape in [Booking addresses](/guides/booking-addresses).
+These are the rules on `POST /bookings`, unchanged. For the `address`
+shape, see [Booking addresses](/guides/booking-addresses).
 
 `heldBy` is who owns the hold — use your checkout session id. It is the
 key to the heartbeat in Step 3, and convert must present the same value.
