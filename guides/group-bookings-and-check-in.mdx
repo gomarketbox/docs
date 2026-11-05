@@ -1,0 +1,327 @@
+---
+title: Group bookings and check-in
+description: Create a booking with more than one seat, register clients on it, check them in at the door, and handle the 409 you get at capacity or on a duplicate — and know that registering a participant charges nothing.
+---
+
+A **group booking** is one booking with `capacity` greater than 1: one
+supplier, one time, one place, and several clients. A class, a group lesson
+or a workshop is one group booking. Each client on it is a **participant**.
+
+This guide covers:
+
+- **Create** a booking with room for more than one client.
+- **Register** clients on it, and handle a full booking or a duplicate.
+- **Pay** for the seats, which the API leaves to you.
+- **Check in** participants at the door, and remove one who drops out.
+
+Every route here takes the API key alone, so it runs on your server. There is
+no client-plane or supplier-plane route for participants.
+
+## Create a group booking
+
+Create the booking with `POST /bookings`, as in
+[Create a single booking](/guides/create-a-single-booking), and send
+`capacity`. The example books a class of 8 at a venue:
+
+```json
+// POST /v1/projects/{projectId}/bookings
+{
+  "clientId": "cli_01kx16f0a1c7b2sd91xzq3mn5p",
+  "supplierId": "sup_01kv60qgnef2kt3pvqgwmkbzfr",
+  "bookingStartUtc": "2026-11-14T15:00:00.000Z",
+  "bookingEndUtc": "2026-11-14T16:00:00.000Z",
+  "bookingTz": "America/Toronto",
+  "locationType": "PHYSICAL",
+  "locationId": "loc_01kv60qh3m7wznp8s0d2rk9abc",
+  "capacity": 8,
+  "services": [
+    {
+      "serviceId": "srv_01kv60qg12e82acr78edfnjhvv",
+      "offeringId": "off_01kv60qge5eh59ap0gw0pqrrys",
+      "businessModelType": "SINGLE_BOOKING",
+      "quantity": 1,
+      "orderId": "ord_01kx16ek2jf4r9da74adf6m4h0",
+      "orderItemId": "oi_01kx16ek2kf2fsc9x7b2n1dfc9"
+    }
+  ]
+}
+```
+
+- **The booking's client takes the first seat.** Every booking is created with
+  its `clientId` already registered as a participant, so a new booking reads
+  `participantCount: 1`. A class of 8 has 7 seats left.
+- **`capacity` defaults to 1.** Leave it out and the booking is one-to-one.
+- **A converted hold or a package session is always one-to-one.**
+  `POST /holds/{reservationId}/convert` and the package-booking routes create
+  every booking with `capacity: 1`. A package's own `capacity` field doesn't
+  change that. Raise it afterwards with `PATCH /bookings/{bookingId}`. See
+  [Change the capacity](#change-the-capacity).
+
+The booking carries three fields for its seats:
+
+| Field | Meaning |
+| --- | --- |
+| `capacity` | How many participants the booking holds, including its own client. |
+| `participantCount` | How many are registered now. Seats left is `capacity - participantCount`. |
+| `isGroupBooking` | `true` when `capacity` is greater than 1. |
+
+<Note>
+**Availability search doesn't sell seats.** Search finds free supplier time.
+A group booking occupies its supplier's time like any other booking, so its
+empty seats never appear in `POST /availability/search` or
+`POST /availability/suppliers`. List your classes from your own records, and
+read `capacity` and `participantCount` from the booking.
+</Note>
+
+## How participants are funded
+
+**They aren't.** The API doesn't charge for a seat. Here is exactly what it
+does:
+
+- **The booking is funded once, when it's created.** Each service line draws
+  `quantity` units (default 1) from its order item. `capacity` doesn't change
+  how much is drawn.
+- **Registering a participant draws nothing.** It writes the roster row and
+  adds 1 to `participantCount`. It reads no order, draws no order item, uses no
+  package credit and records no payment.
+- **Removing a participant returns nothing,** because nothing was drawn for
+  them.
+
+So deciding who has paid for a seat is your server's job. Two ways fit what
+the API does:
+
+- **One buyer pays for every seat.** Create the order item with `quantity`
+  equal to the seats, and book its service line with the same `quantity`. The
+  line's amount is the unit price times `quantity`. Then register the other
+  clients for free.
+- **Each participant pays for their own seat.** Take each payment in your own
+  system before you register the client. Keep the link between the payment
+  and the participant yourself: the API has no field for it.
+
+## Register a participant
+
+Register one client at a time:
+
+```bash Register a participant
+curl -X POST "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/bookings/bk_01kx16f2a0e5x9jv6r0c1qs7pm/participants" \
+  -H "x-api-key: $MARKETBOX_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{ "clientId": "cli_01kx2b4n7d9e3f5g8h1j6k2m4p" }'
+```
+
+```json 201 Created
+{
+  "data": {
+    "projectId": "prj_01kv60qgnef2kt3pvqgwmkbzfr",
+    "bookingId": "bk_01kx16f2a0e5x9jv6r0c1qs7pm",
+    "clientId": "cli_01kx2b4n7d9e3f5g8h1j6k2m4p",
+    "participantStatus": "REGISTERED",
+    "checkInStatus": "PENDING",
+    "checkInAt": null,
+    "registeredAt": "2026-11-04T18:22:05.114Z",
+    "waitlistPosition": null,
+    "deleted": false,
+    "createdAt": "2026-11-04T18:22:05.114Z",
+    "updatedAt": "2026-11-04T18:22:05.114Z",
+    "createdBy": "<the key's user>",
+    "updatedBy": "<the key's user>"
+  }
+}
+```
+
+Take the `clientId` from your own records or from `POST /clients/me` on your
+server. Never trust one the browser sends.
+
+**Capacity is enforced in the same write as the registration.** Two requests
+for the last seat can't both succeed. One gets `201`. The other gets `409`.
+
+**Registration doesn't check the booking's `status`.** A cancelled or
+completed booking still accepts participants. Read the booking first, and
+register only on one that is `SCHEDULED`.
+
+### The booking is full
+
+Registering past `capacity` is a `409`, and nothing is written. There's no
+waitlist: `WAITLISTED` and `waitlistPosition` exist in the schema, but nothing
+sets them.
+
+```json
+{
+  "code": "CONFLICT",
+  "message": "Booking bk_01kx16f2a0e5x9jv6r0c1qs7pm is at capacity",
+  "statusCode": 409,
+  "requestId": "2e9a6c1f-4b8d-4f73-a5e0-8d3c7b1f6a29"
+}
+```
+
+Tell the client the class is full. To add a seat, raise `capacity` first.
+
+### The client is already registered
+
+Registering a client who is on the booking is also a `409 CONFLICT`. No second
+row is written.
+
+```json
+{
+  "code": "CONFLICT",
+  "message": "Client cli_01kx16f0a1c7b2sd91xzq3mn5p is already registered for this booking",
+  "statusCode": 409,
+  "requestId": "7c3f1a8e-2d6b-4e95-b0a4-1f8d5c3e7b62"
+}
+```
+
+This includes the booking's own client, who is registered when the booking is
+created.
+
+<Warning>
+**A client you removed can't be registered on the same booking again.**
+Removing a participant keeps their row, marked cancelled. Registering them
+again finds that row and answers the same `409 CONFLICT`, "is already
+registered for this booking". They don't appear in the roster. Tell the client
+to book another session.
+</Warning>
+
+Both refusals share the code `CONFLICT`. Branch on the roster, not on
+`message`: if the client is in `GET /bookings/{bookingId}/participants`, it's a
+duplicate; otherwise the booking is full, or the client was removed earlier.
+The message isn't reliable for this: the capacity check runs first, so on a
+full booking a duplicate also gets "is at capacity".
+
+### Other refusals
+
+| Status and `code` | `message` | What it means |
+| --- | --- | --- |
+| `404 NOT_FOUND` | `Client not found` | The `clientId` is unknown, or belongs to another project. Nothing was written. |
+| `404 NOT_FOUND` | `Booking bk_… not found` | The booking is unknown in this project, or was deleted. |
+| `400 VALIDATION_ERROR` | | The body has no `clientId`. |
+
+## Show the roster
+
+```bash List participants
+curl "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/bookings/bk_01kx16f2a0e5x9jv6r0c1qs7pm/participants" \
+  -H "x-api-key: $MARKETBOX_API_KEY"
+```
+
+`data` is every registered participant, with their check-in state.
+
+- **It isn't paginated.** The roster is bounded by `capacity`.
+- **Removed participants are left out.**
+- **It's ordered by `clientId`,** not by when each client registered. Sort by
+  `registeredAt` if order matters.
+- **An unknown `bookingId` isn't an error.** It returns `200` with `data: []`.
+  An empty roster doesn't confirm the booking exists.
+
+`GET /bookings/{bookingId}/participants/{clientId}` reads one participant. It's
+a `404 NOT_FOUND`, "Participant not found", when the client isn't registered
+or was removed.
+
+A supplier sees the roster of their own booking in
+`GET /suppliers/me/bookings/{bookingId}`, on the supplier plane. See
+[Supplier portal: bookings](/guides/supplier-portal-bookings).
+
+## Check in a participant
+
+Check a participant in when they arrive:
+
+```bash Check in
+curl -X POST "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/bookings/bk_01kx16f2a0e5x9jv6r0c1qs7pm/participants/cli_01kx2b4n7d9e3f5g8h1j6k2m4p/check-in" \
+  -H "x-api-key: $MARKETBOX_API_KEY"
+```
+
+`200` returns the participant with `checkInStatus: "CHECKED_IN"` and
+`checkInAt` set to now.
+
+- **It's safe to retry.** Checking in someone already checked in leaves them
+  checked in. Each call sets `checkInAt` to the time of that call, so a retry
+  moves it later.
+- **It doesn't change the booking.** The booking's `status` stays as it is.
+  Attendance for the booking as a whole is the supplier's report. See
+  [Supplier day view and attendance reports](/guides/supplier-day-view-and-reporting).
+- **There's no undo.** No route sets `checkInStatus` back to `PENDING`, and
+  none sets `NO_SHOW`.
+- **It doesn't check the booking's `status` either.** A participant on a
+  cancelled booking can still be checked in.
+
+A participant who isn't registered, or was removed, is a `404`:
+
+```json
+{
+  "code": "NOT_FOUND",
+  "message": "Participant cli_01kx2b4n7d9e3f5g8h1j6k2m4p not found on this booking",
+  "statusCode": 404,
+  "requestId": "4b8d2f6a-1c9e-4a37-b5d0-3e7f1a9c6b84"
+}
+```
+
+### Check in from a supplier's portal
+
+The supplier plane has no check-in route. If the supplier checks clients in
+from your portal, your server does it for them with the key:
+
+1. Read `GET /suppliers/me/bookings/{bookingId}` with the supplier's token. A
+   `404` means it isn't their booking. Stop there.
+2. Call check-in with the API key.
+
+The key acts for the business, so step 1 is the only thing stopping a supplier
+checking in clients on someone else's booking.
+
+## Remove a participant
+
+```bash Remove a participant
+curl -X DELETE "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/bookings/bk_01kx16f2a0e5x9jv6r0c1qs7pm/participants/cli_01kx2b4n7d9e3f5g8h1j6k2m4p" \
+  -H "x-api-key: $MARKETBOX_API_KEY"
+```
+
+`204` with no body. The seat is free again, and `participantCount` goes down
+by 1.
+
+- **The booking stays scheduled** for everyone else. To call off the whole
+  class, cancel the booking with `POST /bookings/{bookingId}/status`. See
+  [Cancel or reschedule a booking](/guides/cancel-or-reschedule-a-booking).
+- **It refunds nothing.** No money or credit was taken for the seat. If you
+  took a payment in your own system, return it there.
+- **The booking's own client can be removed too.** The booking's `clientId`
+  doesn't change.
+
+A participant who isn't registered, or was already removed, is a
+`404 NOT_FOUND` with the message "Participant cli_… not found on this booking".
+
+## Change the capacity
+
+Send a new `capacity` with `PATCH /bookings/{bookingId}`:
+
+```json
+// PATCH /v1/projects/{projectId}/bookings/{bookingId}
+{ "capacity": 12 }
+```
+
+`isGroupBooking` follows it. Lowering `capacity` below `participantCount` is
+accepted and removes nobody. New registrations are refused until enough
+participants are removed.
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | What it does |
+| --- | --- | --- |
+| `/v1/projects/{projectId}/bookings` | `POST` | Create the booking, with `capacity`. |
+| `/v1/projects/{projectId}/bookings/{bookingId}` | `GET`, `PATCH` | Read `status`, `capacity` and `participantCount`. Change `capacity`. |
+| `/v1/projects/{projectId}/bookings/{bookingId}/participants` | `POST`, `GET` | Register a participant. List the roster. |
+| `/v1/projects/{projectId}/bookings/{bookingId}/participants/{clientId}` | `GET`, `DELETE` | Read one participant. Remove one. |
+| `/v1/projects/{projectId}/bookings/{bookingId}/participants/{clientId}/check-in` | `POST` | Check a participant in. |
+
+### Errors and edge cases
+
+| Situation | Status and `code` | What to do |
+| --- | --- | --- |
+| The booking is full | `409 CONFLICT`, "Booking bk_… is at capacity" | Tell the client it's full, or raise `capacity`. |
+| The client is already registered | `409 CONFLICT`, usually "Client cli_… is already registered for this booking" ("is at capacity" when the booking is also full) | Nothing to do: they're on the roster. |
+| The client was removed from this booking earlier | `409 CONFLICT`, as for a duplicate | They can't rejoin this booking. Offer another one. |
+| The client is unknown or in another project | `404 NOT_FOUND`, "Client not found" | Check the `clientId` your server resolved. |
+| The booking is unknown or deleted | `404 NOT_FOUND`, "Booking bk_… not found" | Check the `bookingId`. |
+| The booking is cancelled or completed | `201` | Registration doesn't check `status`. Check it before you register. |
+| Check-in or removal of a participant who isn't on the booking | `404 NOT_FOUND`, "Participant cli_… not found on this booking" | Re-read the roster. |
+| Roster of an unknown booking | `200`, `data: []` | Read the booking to confirm it exists. |
+
+See [Errors](/concepts/errors) for the envelope and every code.

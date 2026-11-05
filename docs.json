@@ -40,7 +40,8 @@
               "concepts/versioning",
               "concepts/timezones",
               "concepts/concurrency",
-              "concepts/tracking-state-without-webhooks"
+              "concepts/tracking-state-without-webhooks",
+              "concepts/what-the-api-doesnt-do"
             ]
           },
           {
@@ -57,9 +58,11 @@
               "guides/adjust-a-proposed-slate",
               "guides/hold-slots-for-checkout",
               "guides/cancel-or-reschedule-a-booking",
+              "guides/group-bookings-and-check-in",
               "guides/order-lifecycle-after-checkout",
               "guides/collect-reviews-and-show-ratings",
               "guides/search-suppliers-by-availability",
+              "guides/build-a-supplier-profile-page",
               "guides/booking-addresses",
               "guides/manage-a-client-account",
               "guides/accept-payments-with-stripe",

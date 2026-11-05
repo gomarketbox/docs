@@ -1,0 +1,172 @@
+---
+title: What the API doesn't do
+description: The features the public API doesn't have — webhooks, refunds, payouts, invitations, creating Locations and skills, and some supplier-plane and client-plane actions — and what to do instead of each.
+---
+
+This page lists what the public API can't do today. Each entry says what to
+do instead.
+
+Read it before you design a flow around a feature you expect to exist. If a
+route isn't in the [API reference](/api-reference/introduction), it isn't
+there. Don't guess at a path, and don't retry a `404` hoping a route will
+appear.
+
+## At a glance
+
+| The API has no way to | Do this instead |
+| --- | --- |
+| Push changes to you (webhooks, push notifications) | [Poll](#no-webhooks-or-push-notifications) the resource that changes. |
+| Refund a payment | The business refunds in the MarketBox dashboard. |
+| Report a supplier's earnings, or pay them | Keep earnings and payouts in your own system. |
+| Invite a supplier, or manage memberships | The business invites the supplier from the dashboard. |
+| Create a Location or a skill | The business creates them in the dashboard. Your key reads them. |
+| Write a supplier's hours, blocked time or travel zones with the API key | The supplier does it through your portal, on the supplier plane. |
+| Let a supplier create a booking, read booking notes or connect Google Calendar | Your server books with the key. Notes and Google Calendar stay in the dashboard. |
+| Let a supplier change their own `email`, `maxTravelTime` or `defaultLocale` | The business changes them, with `PUT /suppliers/{supplierId}` or in the dashboard. |
+| Let a client cancel or reschedule on the client plane | Your server does it with the key, after checking the booking is the client's. |
+
+## No webhooks or push notifications
+
+The public API never calls you. Nothing tells your server that an order was
+paid, a booking was cancelled or a hold ran out. There is no route to register
+a webhook, and Stripe's events go to MarketBox, not to you.
+
+**Instead, read the resource again.** Poll what can change on its own, at the
+cadence it changes. See
+[Tracking state without webhooks](/concepts/tracking-state-without-webhooks)
+for what changes after your request returns, what to read, and how often.
+
+A supplier's bell in your portal is polled too. Read
+`GET /suppliers/me/alerts/summary` no more often than every 60 seconds. See
+[Supplier portal: insights and alerts](/guides/supplier-portal-insights-and-alerts#alerts).
+
+## No refunds
+
+No route returns money to a client. Cancelling a booking or an order refunds
+nothing: money already recorded stays on the order, and `amountPaid` doesn't
+change.
+
+**Instead, the business refunds in the MarketBox dashboard.** If your app
+offers a refund, it sends the request to the business. See
+[Cancel or reschedule a booking](/guides/cancel-or-reschedule-a-booking) and
+[Order lifecycle after checkout](/guides/order-lifecycle-after-checkout).
+
+## No supplier earnings or payouts
+
+No route reports what a supplier earned, and none pays a supplier. Insights on
+the supplier plane cover demand and search, not money.
+
+**Instead, keep earnings and payouts in your own system.** The bookings and
+orders you read with the key are the inputs:
+`GET /suppliers/{supplierId}/bookings` lists one supplier's bookings, and each
+order carries its amounts. Wait out the 24-hour dispute window before you
+treat a `COMPLETED` booking as earned. See
+[The booking lifecycle](/resources/bookings#the-booking-lifecycle).
+
+## No invitations or memberships
+
+The API can't invite a supplier to a project, resend an invitation, or add,
+change or remove anyone's membership or roles.
+`POST /suppliers` creates a supplier record, but that doesn't let the person
+sign in to your portal.
+
+**Instead, the business invites the supplier from the MarketBox dashboard.**
+The supplier accepts once, in the dashboard. Accepting is the only thing that
+links their sign-in to their supplier record. After that, they sign in to your
+portal with the same account.
+
+Until they accept, every supplier-plane call is refused:
+
+```json
+{
+  "code": "FORBIDDEN",
+  "message": "No active membership on this project",
+  "statusCode": 403,
+  "requestId": "6a1d3f8e-2b7c-4e95-a0d4-9c5e1b7f3a28"
+}
+```
+
+See [Supplier portal: sign-in and access](/guides/supplier-portal-sign-in-and-access).
+
+## No creating Locations or skills
+
+Locations and skills are read-only in the public API. `GET /locations`,
+`GET /locations/{locationId}` and `GET /skills` read them. Nothing creates,
+edits or deletes them.
+
+**Instead, the business creates them in the MarketBox dashboard.** Your key then
+reads them, and you use their ids when you create offerings, suppliers and
+bookings. A supplier's own travel zones (`stz_` ids) are the exception: the
+supplier creates those through your portal. See
+[Locations and skills](/resources/locations).
+
+## The API key can't write a supplier's availability
+
+No API-key route writes a supplier's weekly hours (schedules), blocked times or
+travel zones. Those are written only on the supplier plane, under
+`/suppliers/me/...`, with the API key **and** the supplier's own access token.
+`GET /suppliers/{supplierId}` returns a supplier's active schedules, read-only.
+
+**Instead, the supplier sets them through your portal.** For a supplier who
+never signs in to your portal, the business sets them in the MarketBox
+dashboard. See
+[Supplier portal: availability](/guides/supplier-portal-availability).
+
+## What a supplier can't do on the supplier plane
+
+The supplier plane covers a supplier's own profile, photo, bookings, hours,
+time off, travel zones, insights and alerts. It doesn't cover these:
+
+- **Create a booking.** There's no supplier-plane route for it. Your server
+  creates bookings with the API key. See
+  [Create a single booking](/guides/create-a-single-booking).
+- **Read booking notes.** `GET /suppliers/me/bookings/{bookingId}` leaves notes
+  out, because staff write them. Your key reads them with
+  `GET /bookings/{bookingId}/notes`. Agree with the business before you show
+  one to a supplier.
+- **Connect Google Calendar.** The supplier connects it in the MarketBox
+  dashboard.
+
+See [Not on the supplier plane yet](/guides/build-a-supplier-portal#not-on-the-supplier-plane-yet).
+
+## A supplier can't change some of their own fields
+
+`PATCH /suppliers/me` refuses six fields: `active`, `email`, `externalId`,
+`externalData`, `maxTravelTime` and `defaultLocale`. A body that names any of
+them is refused whole, whatever the value, and nothing is saved.
+
+The refusal comes back as a `403`:
+
+```json
+{
+  "code": "FIELD_NOT_SELF_EDITABLE",
+  "message": "Only staff can change: email",
+  "statusCode": 403,
+  "requestId": "1f7c3a9e-5d2b-4e86-b0a4-7c2e9f1d6b35"
+}
+```
+
+**Instead, the business changes them.** Your server can do it with
+`PUT /suppliers/{supplierId}` and the API key, or the business uses the
+dashboard. Leave these fields out of the supplier's own form. See
+[Supplier portal: profile and photo](/guides/supplier-portal-profile-and-photo#edit-the-profile).
+
+## A client can't cancel or reschedule on the client plane
+
+The client plane, `/clients/me/...`, has no route to cancel or move a booking.
+
+**Instead, your server does it with the API key:**
+
+1. Resolve the client from their token with `POST /clients/me`, and keep the
+   `clientId` it returns.
+2. Read the booking with `GET /bookings/{bookingId}`.
+3. Refuse when the booking's `clientId` isn't that client's.
+4. Cancel with `POST /bookings/{bookingId}/status`, or move it with
+   `PATCH /bookings/{bookingId}`.
+
+Step 3 matters. The key acts for the business, so the API doesn't check that
+the booking belongs to the person asking. It also skips the service's notice
+window and "clients may not cancel" settings. Apply the business's rules
+yourself before you call. See
+[Cancel or reschedule a booking](/guides/cancel-or-reschedule-a-booking) and
+[Show booking and order history](/guides/manage-a-client-account#show-booking-and-order-history).
