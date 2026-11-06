@@ -221,7 +221,7 @@ A person whose `SUPPLIER` role was removed, and who kept `CLIENT`, sees this on
 ```
 
 <Note>
-Before the release of the access route, these refusals were `403 FORBIDDEN`
+Before November 5, 2026, these refusals were `403 FORBIDDEN`
 ("No active membership on this project", "Insufficient permissions for this
 action") and `404 NOT_FOUND` ("No supplier record for current user"). The
 statuses haven't changed. If your portal matched on `FORBIDDEN` or `NOT_FOUND`
@@ -306,7 +306,7 @@ supplier plane, decide access from this read:
 | No link, `accessEndedAt` `null` | The supplier never joined. | Keep whatever limited view your app gives a supplier who hasn't been invited yet. |
 
 <Warning>
-`accessEndedAt` is stamped from the release of the access route onward.
+`accessEndedAt` is stamped from November 5, 2026 onward.
 A supplier removed before that has `accessEndedAt: null`, and looks the same as
 one who was never invited. To end such a supplier's access in your app, ask the
 business to mark the record inactive.
