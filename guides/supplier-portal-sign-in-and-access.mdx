@@ -1,6 +1,6 @@
 ---
 title: "Supplier portal: sign-in and access"
-description: What a supplier portal needs before its first call, the two credentials on every supplier-plane request, who may call the plane, every refusal, and where MarketBox emails send suppliers.
+description: What a supplier portal needs before its first call, the two credentials on every supplier-plane request, checking access on sign-in, every refusal and its code, telling a removed supplier from one never invited, and where MarketBox emails send suppliers.
 ---
 
 This page is part of [Build a supplier portal](/guides/build-a-supplier-portal).
@@ -81,19 +81,104 @@ Everyone acts as a supplier here. A project admin or manager who also has a
 supplier record acts on **their own** record only, never on someone else's. A
 manager is refused on demand and search insights.
 
-### When access ends
+## Check access first
 
-The business ends a supplier's access by removing their `SUPPLIER` role in the
-dashboard. Their next call is refused with `403` or `404`, depending on the
-route and any role they keep.
+`GET /v1/projects/{projectId}/suppliers/me/access` answers one question: may
+this signed-in person use the supplier plane here, and if not, why? Call it
+**on sign-in**, and again **whenever your portal renews its own session**. Send
+the same two credentials as every other supplier-plane route.
 
-Marking a supplier inactive does **not** end access. An inactive supplier isn't
-offered in search, but keeps everything they had, on your portal as on the
-dashboard.
+```bash
+curl "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/suppliers/me/access" \
+  -H "x-api-key: $MARKETBOX_API_KEY" \
+  -H "Authorization: Bearer <accessToken>"
+```
 
-### Refusals
+Unlike the data routes, it answers **`200` for every outcome about the
+person**. One call tells your portal which screen to show. A current supplier
+gets this:
 
-Every refusal uses the standard [error envelope](/concepts/errors).
+```json
+{
+  "data": {
+    "allowed": true,
+    "reasonCode": "SUPPLIER_ACTIVE",
+    "message": "You have supplier access on this project.",
+    "supplierId": "sup_01kv60qgnef2kt3pvqgwmkbzfr",
+    "roles": ["SUPPLIER"],
+    "membershipStatus": "ACTIVE"
+  }
+}
+```
+
+A person whose `SUPPLIER` role was removed, and who kept `CLIENT`, gets this:
+
+```json
+{
+  "data": {
+    "allowed": false,
+    "reasonCode": "NO_SUPPLIER_ROLE",
+    "message": "You don't have supplier access on this project.",
+    "supplierId": null,
+    "roles": ["CLIENT"],
+    "membershipStatus": "ACTIVE"
+  }
+}
+```
+
+| Field | What it holds |
+| --- | --- |
+| `allowed` | `true` only for `SUPPLIER_ACTIVE`. Use the plane only when it is `true`. |
+| `reasonCode` | Why. One of the seven codes below. Branch on this. |
+| `message` | The reason, written for the person. Show it when `allowed` is `false`. |
+| `supplierId` | The supplier record linked to the person, for `SUPPLIER_ACTIVE` and `SUPPLIER_RECORD_INACTIVE`. Otherwise `null`. |
+| `roles` | Every role the person holds on the project, in the order `CLIENT`, `ADMIN`, `MANAGER`, `DEVELOPER`, `SUPPLIER`. `[]` unless the membership is `ACTIVE`. |
+| `membershipStatus` | `ACTIVE`, `INACTIVE`, or `null` when the person has no account or no membership here. |
+
+| `reasonCode` | When | `allowed` | `message` |
+| --- | --- | --- | --- |
+| `SUPPLIER_ACTIVE` | An `ACTIVE` membership with `SUPPLIER`, and a linked, active supplier record. | `true` | "You have supplier access on this project." |
+| `SUPPLIER_RECORD_INACTIVE` | As above, but the supplier record is marked inactive (`active: false`). | `false` | "Your supplier profile on this project is inactive." |
+| `NO_ACCOUNT` | The token is valid but names no MarketBox account. | `false` | "There is no MarketBox account for this sign-in. Complete registration first." |
+| `NOT_A_MEMBER` | No membership of this project. An invited supplier who hasn't accepted yet, and has no other role here, gets this. | `false` | "You are not a member of this project." |
+| `MEMBERSHIP_INACTIVE` | The membership has ended: every role was removed. | `false` | "Your access to this project has ended." |
+| `NO_SUPPLIER_ROLE` | An `ACTIVE` membership without `SUPPLIER`: it was removed, or they never had it. | `false` | "You don't have supplier access on this project." |
+| `SUPPLIER_NOT_LINKED` | Holds `SUPPLIER`, but no single supplier record is linked to the person. | `false` | "Your sign-in isn't linked to a supplier record on this project." |
+
+`SUPPLIER_RECORD_INACTIVE` is your call. The data routes still serve an
+inactive supplier (see [When access ends](#when-access-ends)), but the access
+route reports `allowed: false` so you can decide what your portal does.
+
+The route describes the **person**, not one acting role, so it ignores
+`X-MB-Acting-Role`. `roles` lists everything they hold.
+
+The access route still fails when your **credentials** are wrong, with the same
+errors as the data routes: a missing or invalid token is `401`, a key without
+Standard API access is `403 CAPABILITY_NOT_GRANTED`, and a project outside the
+key's scope is `403 FORBIDDEN`. See [Refusals](#refusals).
+
+### When the access route and a data route differ
+
+The data routes refuse with the same codes and messages as the access route.
+Two things can still make their answers differ:
+
+- **An inactive supplier record.** The access route says
+  `SUPPLIER_RECORD_INACTIVE`, with `allowed: false`. The data routes answer
+  `200`.
+- **`X-MB-Acting-Role`.** A data route judges the request on the role the
+  header names. A person who holds `SUPPLIER` but sends
+  `X-MB-Acting-Role: CLIENT` gets `404 NO_SUPPLIER_ROLE` on the bookings
+  routes, even with a linked supplier record, while the access route allows
+  them. Acting as a client, a person's "my" views are those of the person
+  receiving the service, never a supplier's schedule. The alerts routes always
+  read the supplier's own inbox, whatever the header names. Your portal doesn't
+  need the header: send none.
+
+## Refusals
+
+Every refusal uses the standard [error envelope](/concepts/errors). **Branch on
+`code`, not on the status.** The same cause can come back as `403` on one route
+and `404` on another.
 
 | Status and `code` | What it means |
 | --- | --- |
@@ -102,26 +187,135 @@ Every refusal uses the standard [error envelope](/concepts/errors).
 | `403 CAPABILITY_NOT_GRANTED` | Your API key lacks Standard API access. Checked before the token. |
 | `401 HTTP_ERROR` | No token, a malformed `Authorization` header, or a token that is invalid or expired. |
 | `401 UNAUTHORIZED` | A token that names no user — and, once enforced, a token from another client. |
-| `403 FORBIDDEN` | "User account not found. Complete registration first." The token is valid, but the person hasn't finished signing up to MarketBox. |
-| `403 FORBIDDEN` | The key can't use this project, or the person isn't an `ACTIVE` member holding the route's permission. An invited supplier who hasn't accepted yet gets "No active membership on this project". |
+| `403 FORBIDDEN` | "User account not found. Complete registration first." The token is valid, but the person hasn't finished signing up to MarketBox. The access route reports this as `NO_ACCOUNT`. |
+| `403 FORBIDDEN` | The key can't use this project. |
+| `403 NOT_A_MEMBER` | "You are not a member of this project." The person has no membership of the project at all — for example, an invited supplier who hasn't accepted yet. |
+| `403 MEMBERSHIP_INACTIVE` | "Your access to this project has ended." They had a membership, and every role was removed. |
+| `403 NO_SUPPLIER_ROLE` | "You don't have supplier access on this project." They are an `ACTIVE` member, but none of the roles they act under grants the route's permission. Their `SUPPLIER` role was removed, or they never had it. |
 | `403 ACTING_ROLE_NOT_HELD` | Your request sent `X-MB-Acting-Role` naming a role the person doesn't hold. A portal doesn't need that header. |
 | `404 NOT_FOUND` | No such project. |
-| `404 NOT_FOUND` | "No supplier record for current user". The person passed every check, but no supplier record in this project is linked to their sign-in — for example, a member who was invited without a supplier record. |
+| `404 NO_SUPPLIER_ROLE` | "You don't have supplier access on this project." The route's permission passed — an admin or manager, or anyone on the bookings and alerts routes — but the person acts under no `SUPPLIER` role, so there is no supplier record to act on. |
+| `404 SUPPLIER_NOT_LINKED` | "Your sign-in isn't linked to a supplier record on this project." They hold `SUPPLIER`, but no single supplier record in this project is linked to their sign-in. |
 
-A person who isn't an active member sees this:
+A person whose access ended sees this:
 
 ```json
 {
-  "code": "FORBIDDEN",
-  "message": "No active membership on this project",
+  "code": "MEMBERSHIP_INACTIVE",
+  "message": "Your access to this project has ended.",
   "statusCode": 403,
   "requestId": "4b1d7e2a-9c3f-4a58-b6e0-2f8d1c5a7e93"
 }
 ```
 
-A member whose roles lack the permission sees the same `code` with
-`"message": "Insufficient permissions for this action"`.
+A person whose `SUPPLIER` role was removed, and who kept `CLIENT`, sees this on
+`GET /suppliers/me/bookings`:
 
+```json
+{
+  "code": "NO_SUPPLIER_ROLE",
+  "message": "You don't have supplier access on this project.",
+  "statusCode": 404,
+  "requestId": "8e2c5a17-3d9b-4f60-a1c4-7b6e0d2f9a35"
+}
+```
+
+<Note>
+Before the release of the access route, these refusals were `403 FORBIDDEN`
+("No active membership on this project", "Insufficient permissions for this
+action") and `404 NOT_FOUND` ("No supplier record for current user"). The
+statuses haven't changed. If your portal matched on `FORBIDDEN` or `NOT_FOUND`
+for these causes, match on the new codes. See the
+[changelog](/changelog/overview).
+</Note>
+
+## When access ends
+
+The business ends a supplier's access by removing their `SUPPLIER` role in the
+dashboard. Their next call is refused, and the `code` names the cause:
+
+- **No roles left.** Every route answers `403 MEMBERSHIP_INACTIVE`.
+- **Some other role kept.** The `code` is `NO_SUPPLIER_ROLE`. The status
+  depends on the route and the role they kept: `403` where that role lacks the
+  route's permission, `404` where it has the permission but there is no
+  supplier record to act on.
+
+| Role kept | `403 NO_SUPPLIER_ROLE` on | `404 NO_SUPPLIER_ROLE` on |
+| --- | --- | --- |
+| `CLIENT` | Profile and photo, hours, blocked time, travel zones, venues, demand and search insights | Bookings, alerts |
+| `ADMIN` | — | Every route |
+| `MANAGER` | Demand and search insights | Every other route |
+| `DEVELOPER` | Every route but alerts | Alerts |
+
+Alerts answer `404` to anyone who keeps any role, because every role holds
+`alert:readOwn`. Rather than map statuses, call
+[the access route](#check-access-first) when a data route refuses: it gives the
+same `reasonCode` with a `200`.
+
+Marking a supplier inactive does **not** end access to the data routes. An
+inactive supplier isn't offered in search, but keeps everything they had, on
+your portal as on the dashboard. The access route reports them as
+`SUPPLIER_RECORD_INACTIVE`, so you can decide what your portal does.
+
+### Removed, or never a supplier
+
+The access route can't say whether a person who now lacks `SUPPLIER` once had
+it. Your server can, with the API key alone: `GET /v1/projects/{projectId}/suppliers/{supplierId}`
+carries an `access` block.
+
+```json
+"access": {
+  "userId": null,
+  "invitationStatus": "NONE",
+  "roles": [],
+  "membershipStatus": null,
+  "accessEndedAt": "2026-11-12T15:04:22.000Z"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `userId` | The MarketBox user linked to the record, or `null` when no one is linked. It is the user `/suppliers/me` resolves that person's token to. |
+| `invitationStatus` | `NONE` (never invited, or unlinked since), `INVITED` (invited, not yet accepted) or `LINKED` (a person accepted). |
+| `roles` | Every role the linked person holds on the project, in the order `CLIENT`, `ADMIN`, `MANAGER`, `DEVELOPER`, `SUPPLIER`. `[]` when the record isn't linked, or the membership isn't `ACTIVE`. |
+| `membershipStatus` | The linked person's membership: `ACTIVE` or `INACTIVE`. `null` when the record isn't linked. |
+| `accessEndedAt` | When the record was last unlinked from a person (ISO 8601, UTC), or `null`. Cleared when someone accepts a new invitation. |
+
+Removing `SUPPLIER` unlinks the record: `userId` becomes `null`,
+`invitationStatus` becomes `NONE` and `roles` becomes `[]`, whatever roles the
+person keeps. `accessEndedAt` is what tells a removed supplier from one who was
+never invited:
+
+| Situation | `invitationStatus` | `userId` | `roles` | `membershipStatus` | `accessEndedAt` |
+| --- | --- | --- | --- | --- | --- |
+| Never invited | `NONE` | `null` | `[]` | `null` | `null` |
+| Invited, not yet accepted | `INVITED` | `null` | `[]` | `null` | `null` |
+| Linked | `LINKED` | set | includes `SUPPLIER` | `ACTIVE` | `null` |
+| `SUPPLIER` removed | `NONE` | `null` | `[]` | `null` | set |
+| Removed, then invited again | `INVITED` | `null` | `[]` | `null` | set |
+| Removed, invited again and accepted | `LINKED` | set | includes `SUPPLIER` | `ACTIVE` | `null` |
+
+If your app reads a supplier's data with the API key, rather than through the
+supplier plane, decide access from this read:
+
+| `GET /suppliers/{supplierId}` says | What it means | What your app does |
+| --- | --- | --- |
+| `404`, or `active: false` | The record was deleted, or the business paused the supplier. | Treat the supplier as removed. |
+| `access.roles` includes `SUPPLIER` | A current, linked supplier. | Move them to the supplier plane: sign them in and [check access](#check-access-first). |
+| No link, `accessEndedAt` set | The supplier was removed. | End their supplier session in your app. Leave any other sign-in the person has alone. |
+| No link, `accessEndedAt` `null` | The supplier never joined. | Keep whatever limited view your app gives a supplier who hasn't been invited yet. |
+
+<Warning>
+`accessEndedAt` is stamped from the release of the access route onward.
+A supplier removed before that has `accessEndedAt: null`, and looks the same as
+one who was never invited. To end such a supplier's access in your app, ask the
+business to mark the record inactive.
+</Warning>
+
+The API key decides who sees what on a key-only read: MarketBox never learns
+which person is behind the request. `roles` also tells your key which suppliers
+are staff. Keep the response on your server, as you would the supplier's
+`email` and `phone`.
 
 ## Links in MarketBox emails
 

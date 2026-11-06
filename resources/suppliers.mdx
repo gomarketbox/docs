@@ -287,6 +287,13 @@ curl "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/suppliers/sup_01kv60q
           }
         }
       ]
+    },
+    "access": {
+      "userId": "usr_01kv5z8m3c7qdx4hw2ne6ta9pk",
+      "invitationStatus": "LINKED",
+      "roles": ["CLIENT", "SUPPLIER"],
+      "membershipStatus": "ACTIVE",
+      "accessEndedAt": null
     }
   }
 }
@@ -304,6 +311,30 @@ An **inactive** supplier is returned, with `active: false`, so a profile page
 for a paused supplier still renders. This differs from the list, which hides
 them. A `404` means the id is unknown in this project, belongs to another
 project, or has been deleted — those three are not distinguished.
+
+### Who can sign in as this supplier
+
+Only the detail read carries `access`. `GET /suppliers` and
+`POST /availability/suppliers` don't. It says whether the record is linked to a
+person who can sign in to your portal, and what that person holds on the
+project:
+
+| Field | Meaning |
+| --- | --- |
+| `userId` | The MarketBox user linked to the record, or `null`. |
+| `invitationStatus` | `NONE` (never invited, or unlinked since), `INVITED` (invited, not yet accepted) or `LINKED`. |
+| `roles` | Every role the linked person holds on the project. `[]` when the record isn't linked, or the membership isn't `ACTIVE`. |
+| `membershipStatus` | `ACTIVE` or `INACTIVE` for the linked person's membership; `null` when the record isn't linked. |
+| `accessEndedAt` | When the record was last unlinked from a person, or `null`. Cleared when someone accepts a new invitation. |
+
+Removing a supplier's `SUPPLIER` role unlinks the record, so `invitationStatus`
+goes back to `NONE`. **`accessEndedAt` tells the two `NONE`s apart:** set means
+the supplier was removed, `null` means they were never invited. A supplier
+removed before this field shipped has `null`. See
+[Removed, or never a supplier](/guides/supplier-portal-sign-in-and-access#removed-or-never-a-supplier).
+
+`access` is read-only. The business invites and removes suppliers in the
+dashboard.
 
 ## Rating and reviews
 
@@ -542,6 +573,10 @@ there: `me` is the supplier the token belongs to. See
 as the MarketBox dashboard shows it. It adds `serviceIds` and `skillIds`, the
 raw assignments, where the public endpoints return only the joined `services`
 and `skills`.
+
+`GET /v1/projects/{projectId}/suppliers/me/access` tells your portal, on
+sign-in, whether the person may use the supplier plane at all, and why not.
+See [Check access first](/guides/supplier-portal-sign-in-and-access#check-access-first).
 
 ## Bookings for one supplier
 

@@ -3,6 +3,46 @@ title: "Changelog"
 description: "New features, updates, and fixes to the MarketBox API."
 ---
 
+<Update label="Next production release" tags={["API"]}>
+
+## Supplier access: an access check, refusal codes that name the cause, and removed versus never invited
+
+Ships with the next production release. A supplier portal can now ask, on sign-in, whether the person may use the supplier plane and why not. Supplier-plane refusals now say which of those reasons applies. A key-only integration can tell a supplier who was removed from one who was never invited.
+
+**Breaking for clients that match on `code`: the supplier plane's refusals keep their statuses but carry new codes.** Two requests that used to succeed are now refused: the supplier bookings routes with `X-MB-Acting-Role: CLIENT`, and an update to an offering or business model with an unknown id. Regenerate decoders for `GET /suppliers/{supplierId}`, which gains a required `access` object.
+
+**Changed: supplier-plane refusal codes (statuses unchanged)**
+
+- **`/suppliers/me` routes name why they refuse.** These used to be `403 FORBIDDEN` or `404 NOT_FOUND`:
+  - `403 NOT_A_MEMBER`, "You are not a member of this project.": no membership of the project. Was `FORBIDDEN`, "No active membership on this project".
+  - `403 MEMBERSHIP_INACTIVE`, "Your access to this project has ended.": every role was removed. Was `FORBIDDEN`, "No active membership on this project".
+  - `403 NO_SUPPLIER_ROLE`, "You don't have supplier access on this project.": the roles the person acts under lack the route's permission. Was `FORBIDDEN`, "Insufficient permissions for this action".
+  - `404 NO_SUPPLIER_ROLE`: the permission passed, but the person acts under no `SUPPLIER` role. Was `NOT_FOUND`, "No supplier record for current user".
+  - `404 SUPPLIER_NOT_LINKED`, "Your sign-in isn't linked to a supplier record on this project.": holds `SUPPLIER`, but no single supplier record is linked. Was `NOT_FOUND`, "No supplier record for current user".
+
+  A booking, schedule or other id that isn't the supplier's is still `404 NOT_FOUND`. "User account not found. Complete registration first." is still `403 FORBIDDEN`. The client plane (`/clients/me`) is unchanged.
+- **Acting as `CLIENT` never serves a supplier's bookings.** A request to the supplier plane's bookings routes with `X-MB-Acting-Role: CLIENT` is `404 NO_SUPPLIER_ROLE`, even when the person has a linked supplier record. It used to answer `200`. The alerts routes always read the supplier's own inbox, whatever the header names.
+
+**Added: the access route and the detail `access` block**
+
+- **`GET /v1/projects/{projectId}/suppliers/me/access`** — takes the API key and the person's access token, and always answers `200` with `{ allowed, reasonCode, message, supplierId, roles, membershipStatus }`. `reasonCode` is one of `SUPPLIER_ACTIVE` (the only `allowed: true`), `SUPPLIER_RECORD_INACTIVE`, `NO_ACCOUNT`, `NOT_A_MEMBER`, `MEMBERSHIP_INACTIVE`, `NO_SUPPLIER_ROLE` and `SUPPLIER_NOT_LINKED`. It ignores `X-MB-Acting-Role`. Wrong credentials still fail with `401` or `403`.
+- **`access` on `GET /v1/projects/{projectId}/suppliers/{supplierId}`** — `userId`, `invitationStatus`, `roles` (empty unless the membership is `ACTIVE`), `membershipStatus` (`ACTIVE`, `INACTIVE` or `null`) and `accessEndedAt`. `accessEndedAt` is set when the person is unlinked, and is `null` for removals made before this release. `GET /suppliers` and `POST /availability/suppliers` don't carry it.
+
+**Fixed**
+
+- **Updating an offering or a business model with an unknown id is `404 NOT_FOUND`.** `PUT …/offerings/{offeringId}` ("Offering not found") and `PUT …/business-models/{businessModelId}` ("Business model not found") used to write a new, partial record. Nothing is written now. The status routes are unchanged.
+
+**What this means for you**
+
+- **Match the new codes.** If your portal branches on `FORBIDDEN` or `NOT_FOUND` from `/suppliers/me` to detect lost access, branch on `NOT_A_MEMBER`, `MEMBERSHIP_INACTIVE`, `NO_SUPPLIER_ROLE` and `SUPPLIER_NOT_LINKED` too.
+- **Check access on sign-in.** Call `GET /suppliers/me/access` when the person signs in and when your portal renews its session. Use the plane only when `allowed` is `true`; otherwise show `message`.
+- **Don't send `X-MB-Acting-Role` from a portal.** A portal never needs it.
+- **Tell removed from never invited with `accessEndedAt`.** If your app reads supplier data with the API key, end a supplier's session when the record has no link and `accessEndedAt` is set.
+
+Full detail: [Supplier portal → Check access first](/guides/supplier-portal-sign-in-and-access#check-access-first), [Refusals](/guides/supplier-portal-sign-in-and-access#refusals), [When access ends](/guides/supplier-portal-sign-in-and-access#when-access-ends), [Removed, or never a supplier](/guides/supplier-portal-sign-in-and-access#removed-or-never-a-supplier), [Suppliers → Who can sign in as this supplier](/resources/suppliers#who-can-sign-in-as-this-supplier), [Errors](/concepts/errors#common-error-codes).
+
+</Update>
+
 <Update label="November 5, 2026" tags={["API"]}>
 
 ## Unknown ids and a misplaced package line answer 4xx instead of 500

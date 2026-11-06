@@ -37,7 +37,7 @@ specific to suppliers, start with
 
 | Page | What it covers |
 | --- | --- |
-| [Sign-in and access](/guides/supplier-portal-sign-in-and-access) | What you need first, the two credentials, who may call the plane, every refusal, and the links in MarketBox emails. |
+| [Sign-in and access](/guides/supplier-portal-sign-in-and-access) | What you need first, the two credentials, checking access on sign-in, every refusal, removed versus never-invited suppliers, and the links in MarketBox emails. |
 | [Profile and photo](/guides/supplier-portal-profile-and-photo) | Reading and editing the profile, picking services and skills, and changing the photo. |
 | [Bookings](/guides/supplier-portal-bookings) | The day's agenda, attendance reports, rating the client, and cancelling or moving a booking. |
 | [Availability](/guides/supplier-portal-availability) | Working hours, blocked time, `exdates`, travel zones and venues: the field rules for each. |
@@ -63,6 +63,12 @@ access token. The service list and the availability check take the API key
 alone.
 
 <Steps>
+<Step title="Check access">
+`GET /suppliers/me/access` answers `200` with `allowed` and a `reasonCode`.
+Go on only when `allowed` is `true`; otherwise show its `message`. See
+[Check access first](/guides/supplier-portal-sign-in-and-access#check-access-first).
+</Step>
+
 <Step title="Read the profile">
 `GET /suppliers/me` returns the supplier's own profile, including `timezone`
 and `serviceIds`. See
@@ -145,6 +151,7 @@ token.
 
 | Endpoint | Methods |
 | --- | --- |
+| `/v1/projects/{projectId}/suppliers/me/access` | `GET` |
 | `/v1/projects/{projectId}/suppliers/me` | `GET`, `PATCH` |
 | `/v1/projects/{projectId}/suppliers/me/avatar/upload-url` | `POST` |
 | `/v1/projects/{projectId}/suppliers/me/avatar` | `PUT`, `DELETE` |
@@ -173,6 +180,7 @@ Key-only routes the portal also uses, with the API key alone:
 
 | Endpoint | Methods |
 | --- | --- |
+| `/v1/projects/{projectId}/suppliers/{supplierId}` | `GET` |
 | `/v1/projects/{projectId}/services` | `GET` |
 | `/v1/projects/{projectId}/skills` | `GET` |
 | `/v1/projects/{projectId}/locations` | `GET` |
