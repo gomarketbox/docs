@@ -593,7 +593,9 @@ needs no service or offering, so it separates "nobody serves here" from
 | Neither `locationId` nor both `lat`+`lng` provided | `VALIDATION_ERROR` | `400` | Send one location form: a `locationId`, or both `lat` and `lng`. |
 | `limit` out of range (`< 1` or `> 50`) | `VALIDATION_ERROR` | `400` | Use 1–50. Pages are small because each supplier is computed on demand. |
 | Malformed `cursor` | `BAD_REQUEST` | `400` | Only pass back a `nextCursor` you were given; don't hand-build the token. |
-| `serviceId`/`offeringId` doesn't resolve to an offering | `INTERNAL_ERROR` | `500` | Make sure both ids are correct and from this project — an unknown offering can't be searched. |
+| `serviceId`/`offeringId` doesn't resolve to an offering | `NOT_FOUND` | `404` | The message names both ids: "Service offering off_… not found on service srv_…". Make sure both ids are correct and from this project. |
+| `locationId` (sent without `lat`/`lng`) names no Location | `NOT_FOUND` | `404` | The message is "Location loc_… not found". Take the id from `GET /locations`. |
+| The location has no coordinates to search from | `BAD_REQUEST` | `400` | "Could not resolve coordinates for the requested location". Search with `lat` and `lng`, or ask the business to fix the Location. |
 | No supplier serves the service at that location | — | `200` | Not an error: `data` is `[]`. Widen the location/window, or verify coverage via `GET /suppliers?lat=&lng=` with the same point. |
 | Supplier matches but is fully booked in the window | — | `200` | Not an error: that supplier is returned with `days: []`. Filter client-side if you only want bookable cards. |
 | API key can't access this project | — | `403` | Use a key scoped to `{projectId}`. See [Projects and scope](/concepts/projects-and-scope). |

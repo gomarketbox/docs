@@ -18660,7 +18660,7 @@
       "post": {
         "tags": ["Orders"],
         "summary": "Add an item to an order",
-        "description": "Adds a line and returns the whole order with its items, so you never need a follow-up read to get the new total. You do not send a price: the server resolves it from the offering or package against the order's `pricingRegion`, which is what keeps the charge honest. A line whose resolved currency differs from the order's is rejected with 400 rather than silently converted — if you hit that, the order resolved a different region than you expected, so check `priceScope` on the existing items.",
+        "description": "Adds a line and returns the whole order with its items, so you never need a follow-up read to get the new total. You do not send a price: the server resolves it from the offering against the order's `pricingRegion`, which is what keeps the charge honest. A line whose resolved currency differs from the order's is rejected with 400 rather than silently converted — if you hit that, the order resolved a different region than you expected, so check `priceScope` on the existing items. A PACKAGE line cannot be added here (400 `VALIDATION_ERROR`): packages are bought when the order is created, by `packageId` in `POST /orders`.",
         "parameters": [
           {
             "schema": {
@@ -18699,11 +18699,11 @@
                     "type": "string",
                     "enum": [
                       "SINGLE_SESSION",
-                      "PACKAGE",
                       "SUBSCRIPTION",
                       "MEMBERSHIP",
                       "DEPOSIT"
-                    ]
+                    ],
+                    "description": "What kind of line this is. PACKAGE is not accepted here: a package is bought when the order is created, by packageId."
                   },
                   "serviceId": {
                     "type": "string",
@@ -18964,7 +18964,7 @@
             }
           },
           "400": {
-            "description": "Validation error, non-ACTIVE offering, or currency mismatch",
+            "description": "Validation error (including skuType PACKAGE, which is bought at order create), non-ACTIVE offering, or currency mismatch",
             "content": {
               "application/json": {
                 "schema": {
@@ -27571,6 +27571,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No offering for this serviceId/offeringId, or no location for this locationId (sent without lat/lng); the message names the id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                }
+              }
+            }
           }
         }
       }
@@ -28386,6 +28396,16 @@
           },
           "403": {
             "description": "API key cannot access this project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No offering for this serviceId/offeringId, or no location for this locationId (sent without lat/lng); the message names the id",
             "content": {
               "application/json": {
                 "schema": {

@@ -156,9 +156,19 @@ prices it from the offering, against the region the order was created with:
 
 **Add `PACKAGE` lines only when you create the order.** The add route takes
 no `packageId`, so it can't build a package line. Sending `skuType: "PACKAGE"`
-here fails with `500 INTERNAL_ERROR`, `An unexpected error occurred`. To sell
-another package, create a new order with the `PACKAGE` line in `items`. See
-[Selling a package](/resources/packages#selling-a-package).
+here is refused before anything is written:
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "skuType: a PACKAGE line can only be added when the order is created: send it in POST /orders items[] with a packageId",
+  "statusCode": 400,
+  "requestId": "6e1b9c3a-4d7f-4a28-b0e5-2c8f1d6a9b47"
+}
+```
+
+To sell another package, create a new order with the `PACKAGE` line in
+`items`. See [Selling a package](/resources/packages#selling-a-package).
 
 A service with no active rate for the line is `422 SERVICE_NOT_SOLD_AS`. See
 [Creating an order](/resources/orders#creating-an-order).
@@ -296,7 +306,7 @@ An order that never reached payment and booked nothing can be deleted. See
 | Booking from a cancelled order | `ORDER_CANCELLED` | `409` | Don't retry. Create a new order. |
 | A client booking an unpaid package credit | `CREDIT_NOT_BOOKABLE` | `409` | Wait for `PAID`, or record the payment. |
 | A card payment on a `PAID` or `CANCELLED` order | `BAD_REQUEST` | `400` | Nothing to pay. |
-| Adding a `PACKAGE` line to an existing order | `INTERNAL_ERROR` | `500` | Create a new order with the `PACKAGE` line. |
+| Adding a `PACKAGE` line to an existing order | `VALIDATION_ERROR` | `400` | Create a new order with the `PACKAGE` line. |
 | Listing package bookings without `orderItemId`, or for a removed line | `VALIDATION_ERROR` / `NOT_FOUND` | `400` / `404` | Send the line's `orderItemId`, and read it before you remove the line. |
 | An item on a service with no active rate for it | `SERVICE_NOT_SOLD_AS` | `422` | Activate the rate in the MarketBox console. |
 | Deleting an order with a booking or money | `ORDER_NOT_DELETABLE` | `409` | Cancel it instead. |
