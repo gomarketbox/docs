@@ -248,8 +248,10 @@ paginated.
 A fee on an inactive business model is stored but never charged, because an
 order line resolves only against active models.
 
-Neither route checks that the `businessModelId` exists. A mistyped id writes
-a new, partial record instead of returning `404`. Use the ids from the
+`PUT .../business-models/{businessModelId}` with an unknown id is
+`404 NOT_FOUND`, "Business model not found", and nothing is written. The
+status route doesn't check that the `businessModelId` exists: a mistyped id
+writes a new, partial record instead of returning `404`. Use the ids from the
 create response or the list.
 
 **Turning off the `PACKAGE` model does more than stop new packages.** While
@@ -456,9 +458,10 @@ the fields you send are written.
 - An order item already placed keeps the price it was captured at. A new
   price applies to new order lines only.
 
-Neither this route nor the status route checks that the `offeringId` exists.
-A mistyped id writes a new, partial record instead of returning `404`. Use the
-ids from the create response or the list.
+An unknown or deleted `offeringId` is `404 NOT_FOUND`, "Offering not found",
+and nothing is written. The status route doesn't check that the offering
+exists: a mistyped id writes a new, partial record instead of returning `404`.
+Use the ids from the create response or the list.
 
 ### Deleting an offering
 

@@ -821,6 +821,65 @@
         },
         "required": ["events"]
       },
+      "SupplierPlaneAccess": {
+        "type": "object",
+        "properties": {
+          "allowed": {
+            "type": "boolean",
+            "description": "True only for `SUPPLIER_ACTIVE`: use the supplier plane with `supplierId`. Otherwise show `message`.",
+            "example": false
+          },
+          "reasonCode": {
+            "type": "string",
+            "enum": [
+              "SUPPLIER_ACTIVE",
+              "SUPPLIER_RECORD_INACTIVE",
+              "NO_ACCOUNT",
+              "NOT_A_MEMBER",
+              "MEMBERSHIP_INACTIVE",
+              "NO_SUPPLIER_ROLE",
+              "SUPPLIER_NOT_LINKED"
+            ],
+            "description": "Why. `SUPPLIER_ACTIVE`: an ACTIVE membership holding SUPPLIER and a linked, active supplier record. `SUPPLIER_RECORD_INACTIVE`: the same, but the record is `active: false`. `NO_ACCOUNT`: the token is valid but names no MarketBox account. `NOT_A_MEMBER`: no membership in this project. `MEMBERSHIP_INACTIVE`: the membership has ended (every role removed). `NO_SUPPLIER_ROLE`: an ACTIVE membership without SUPPLIER. `SUPPLIER_NOT_LINKED`: holds SUPPLIER, but no single supplier record is linked to the person.",
+            "example": "NO_SUPPLIER_ROLE"
+          },
+          "message": {
+            "type": "string",
+            "description": "The reason, for a person. The data routes refuse with the same text.",
+            "example": "You don't have supplier access on this project."
+          },
+          "supplierId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The supplier record linked to the person here, for `SUPPLIER_ACTIVE` and `SUPPLIER_RECORD_INACTIVE`; otherwise null.",
+            "example": null
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["CLIENT", "ADMIN", "MANAGER", "DEVELOPER", "SUPPLIER"]
+            },
+            "description": "Every role the person holds on the project, in the order CLIENT, ADMIN, MANAGER, DEVELOPER, SUPPLIER. `[]` unless the membership is ACTIVE. `X-MB-Acting-Role` is ignored.",
+            "example": ["CLIENT"]
+          },
+          "membershipStatus": {
+            "type": "string",
+            "nullable": true,
+            "enum": ["ACTIVE", "INACTIVE", null],
+            "description": "The membership: `ACTIVE`, or `INACTIVE` for every other status. Null when the person has no account or no membership here.",
+            "example": "ACTIVE"
+          }
+        },
+        "required": [
+          "allowed",
+          "reasonCode",
+          "message",
+          "supplierId",
+          "roles",
+          "membershipStatus"
+        ]
+      },
       "Address": {
         "type": "object",
         "nullable": true,
@@ -2299,6 +2358,81 @@
         }
       }
     },
+    "/v1/projects/{projectId}/suppliers/me/access": {
+      "get": {
+        "security": [
+          {
+            "ApiKeyAuth": [],
+            "EndUserBearer": []
+          }
+        ],
+        "tags": ["Supplier plane"],
+        "summary": "Whether the signed-in person may use the supplier plane, and why not",
+        "description": "Answers 200 for every signed-in person, with `allowed` and a `reasonCode`; it never answers 4xx for a person-level outcome. Call it on sign-in, and use the plane with the returned `supplierId` only when `allowed` is true; otherwise show `message`. `reasonCode` is one of: `SUPPLIER_ACTIVE` (allowed), `SUPPLIER_RECORD_INACTIVE`, `NO_ACCOUNT`, `NOT_A_MEMBER`, `MEMBERSHIP_INACTIVE`, `NO_SUPPLIER_ROLE` and `SUPPLIER_NOT_LINKED`. The other `/suppliers/me` routes refuse with the same codes and messages. It describes the person: `X-MB-Acting-Role` is ignored, and `roles` lists every role they hold here. Only the app’s credentials still fail: a missing or invalid user token (401), a key without standard access (403 `CAPABILITY_NOT_GRANTED`), or a project outside the key’s scope (403). Requires the API key and the person’s user token.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The project (tenant) that owns the resource. Every resource in this API is scoped to a project, and your API key is restricted to the projects it was issued for — a project outside that scope returns 403.",
+              "example": "prj_01kv60qgnef2kt3pvqgwmkbzfr"
+            },
+            "required": true,
+            "description": "The project (tenant) that owns the resource. Every resource in this API is scoped to a project, and your API key is restricted to the projects it was issued for — a project outside that scope returns 403.",
+            "name": "projectId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The person’s access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SupplierPlaneAccess"
+                    }
+                  },
+                  "required": ["data"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key or user token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks standard access (CAPABILITY_NOT_GRANTED), or cannot access this project (FORBIDDEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/projects/{projectId}/suppliers/me/bookings": {
       "get": {
         "security": [
@@ -2846,7 +2980,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2856,7 +2990,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such booking of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such booking of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3549,7 +3683,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3559,7 +3693,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such booking of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such booking of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3664,7 +3798,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD), or the booking’s service does not let suppliers do this (PARTICIPANT_ACTION_DISABLED)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD); or the booking’s service does not let suppliers do this (PARTICIPANT_ACTION_DISABLED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3674,7 +3808,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such booking of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such booking of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3863,7 +3997,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3873,7 +4007,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such booking of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such booking of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4183,7 +4317,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4193,7 +4327,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such booking of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such booking of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4378,7 +4512,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD), or the booking’s service does not let suppliers do this (PARTICIPANT_ACTION_DISABLED)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD); or the booking’s service does not let suppliers do this (PARTICIPANT_ACTION_DISABLED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4388,7 +4522,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such booking of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such booking of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4913,7 +5047,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4923,7 +5057,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such schedule of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such schedule of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5257,7 +5391,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5267,7 +5401,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such schedule of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such schedule of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5578,7 +5712,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5588,7 +5722,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such schedule of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such schedule of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6113,7 +6247,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6123,7 +6257,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such schedule of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such schedule of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6195,7 +6329,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6205,7 +6339,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such schedule of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such schedule of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6526,7 +6660,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6536,7 +6670,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such schedule of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such schedule of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6628,7 +6762,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6638,7 +6772,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such schedule of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such schedule of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6967,7 +7101,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6977,7 +7111,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such blocked time of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such blocked time of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7202,7 +7336,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7212,7 +7346,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such blocked time of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such blocked time of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7424,7 +7558,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7434,7 +7568,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such blocked time of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such blocked time of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7778,7 +7912,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7788,7 +7922,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such blocked time of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such blocked time of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7860,7 +7994,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7870,7 +8004,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such blocked time of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such blocked time of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8435,7 +8569,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD), or INSIGHTS_DISABLED (the project turned the feature off)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD); or INSIGHTS_DISABLED (the project turned the feature off)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8445,7 +8579,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8548,7 +8682,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD), or INSIGHTS_DISABLED (the project turned the feature off)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD); or INSIGHTS_DISABLED (the project turned the feature off)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8558,7 +8692,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8659,7 +8793,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD), or INSIGHTS_DISABLED (the project turned the feature off)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD); or INSIGHTS_DISABLED (the project turned the feature off)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8669,7 +8803,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9859,7 +9993,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD), or INSIGHTS_DISABLED (the project turned the feature off)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD); or INSIGHTS_DISABLED (the project turned the feature off)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9869,7 +10003,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10081,7 +10215,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10091,7 +10225,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10436,7 +10570,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD), or the body names a field only staff may change (FIELD_NOT_SELF_EDITABLE)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD); or the body names a field only staff may change (FIELD_NOT_SELF_EDITABLE)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10446,7 +10580,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10594,7 +10728,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10604,7 +10738,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10850,7 +10984,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10860,7 +10994,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10910,7 +11044,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10920,7 +11054,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11334,7 +11468,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11344,7 +11478,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11626,7 +11760,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11636,7 +11770,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11896,7 +12030,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11906,7 +12040,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such travel zone of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such travel zone of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12355,7 +12489,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12365,7 +12499,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such travel zone of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such travel zone of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12437,7 +12571,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12447,7 +12581,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project, or no such travel zone of theirs",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such travel zone of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12625,7 +12759,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12635,7 +12769,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13017,7 +13151,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13027,7 +13161,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13261,7 +13395,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13271,7 +13405,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13350,7 +13484,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13360,7 +13494,7 @@
             }
           },
           "404": {
-            "description": "The signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13434,7 +13568,7 @@
             }
           },
           "403": {
-            "description": "The API key cannot access this project, or the signed-in user is not an ACTIVE member of it holding the route’s permission (FORBIDDEN), or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
+            "description": "The API key cannot access this project (FORBIDDEN) or lacks standard API access (CAPABILITY_NOT_GRANTED); or the signed-in user has no MarketBox account record (FORBIDDEN, \"User account not found. Complete registration first.\"); or the signed-in user is not a member of the project (NOT_A_MEMBER), their membership has ended (MEMBERSHIP_INACTIVE), or the roles they act under lack the route’s permission (NO_SUPPLIER_ROLE); or X-MB-Acting-Role names a role they do not hold (ACTING_ROLE_NOT_HELD)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13444,7 +13578,7 @@
             }
           },
           "404": {
-            "description": "Alert not found, or the signed-in user is not a supplier in this project",
+            "description": "The signed-in user has no supplier record here: no SUPPLIER among the roles they act under (NO_SUPPLIER_ROLE), or no single supplier record linked to them (SUPPLIER_NOT_LINKED); or no such alert of theirs (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -24216,7 +24350,7 @@
       "get": {
         "tags": ["Suppliers"],
         "summary": "One supplier in full: profile, services, skills, locations, rating and working hours",
-        "description": "Everything about one supplier in a single call — the same shape `GET /suppliers` returns for a row, plus two blocks the list deliberately omits because they cost a read each: `rating` and `availability`. Use it for a supplier profile page; use the list for a directory.\n\nThe response carries the full booking identity, not just display content: `supplierId` to book against, `active` for whether they take bookings at all, `services[]` with ids AND localized labels, `timezone` for rendering their hours, `country`/`state`/`postalcode` (the inputs regional price rules resolve against), and every `locations[].locationId` — including travel zones, which is the id you send as `locationId` when you book a mobile service.\n\n`availability` is the recurring pattern of WHEN AND WHERE THIS SUPPLIER WORKS. It is not a list of bookable times: it ignores existing bookings, time off, and how long an offering takes, so never present a slot built from it as available. For times you can actually book, call `POST /availability/suppliers` with a service, an offering and a location. Only ACTIVE schedules appear, so `availability.schedules: []` means this supplier cannot currently be booked at all — which can be true even when `active` is `true`, because the two are set independently.\n\nUnlike the list, this endpoint DOES return an inactive supplier, with `active: false`, so a profile page for a paused supplier still renders. A 404 means the id is unknown in this project, belongs to another project, or has been deleted — those three are not distinguished.",
+        "description": "Everything about one supplier in a single call — the same shape `GET /suppliers` returns for a row, plus two blocks the list deliberately omits because they cost a read each: `rating` and `availability`. Use it for a supplier profile page; use the list for a directory.\n\nIt also carries an `access` block saying whether the supplier record is linked to a person and what that person may do on the project: `userId`, `invitationStatus`, `roles`, `membershipStatus` and `accessEndedAt`. The list does not carry it.\n\nThe response carries the full booking identity, not just display content: `supplierId` to book against, `active` for whether they take bookings at all, `services[]` with ids AND localized labels, `timezone` for rendering their hours, `country`/`state`/`postalcode` (the inputs regional price rules resolve against), and every `locations[].locationId` — including travel zones, which is the id you send as `locationId` when you book a mobile service.\n\n`availability` is the recurring pattern of WHEN AND WHERE THIS SUPPLIER WORKS. It is not a list of bookable times: it ignores existing bookings, time off, and how long an offering takes, so never present a slot built from it as available. For times you can actually book, call `POST /availability/suppliers` with a service, an offering and a location. Only ACTIVE schedules appear, so `availability.schedules: []` means this supplier cannot currently be booked at all — which can be true even when `active` is `true`, because the two are set independently.\n\nUnlike the list, this endpoint DOES return an inactive supplier, with `active: false`, so a profile page for a paused supplier still renders. A 404 means the id is unknown in this project, belongs to another project, or has been deleted — those three are not distinguished.",
         "parameters": [
           {
             "schema": {
@@ -24728,6 +24862,54 @@
                             "schedules"
                           ],
                           "description": "When and where this supplier WORKS — their recurring schedule pattern. This is not a list of bookable times: it ignores existing bookings, time off, and how long an offering takes. For times you can actually book, call `POST /availability/suppliers` with a service, an offering and a location."
+                        },
+                        "access": {
+                          "type": "object",
+                          "properties": {
+                            "userId": {
+                              "type": "string",
+                              "nullable": true,
+                              "description": "The linked MarketBox user id (`Users.userId`, not the Cognito `sub`), or `null` when the record is not linked to a person. It is the user `/suppliers/me` resolves that person's token to."
+                            },
+                            "invitationStatus": {
+                              "type": "string",
+                              "enum": ["NONE", "INVITED", "LINKED"],
+                              "description": "`NONE` (never invited, or unlinked since), `INVITED` (invited, not yet accepted) or `LINKED` (a person accepted)."
+                            },
+                            "roles": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "CLIENT",
+                                  "ADMIN",
+                                  "MANAGER",
+                                  "DEVELOPER",
+                                  "SUPPLIER"
+                                ]
+                              },
+                              "description": "Every role the linked person holds on the project, in the order `CLIENT`, `ADMIN`, `MANAGER`, `DEVELOPER`, `SUPPLIER`. Empty when the record is not linked, whatever the person still holds elsewhere, and empty unless the membership is `ACTIVE`."
+                            },
+                            "membershipStatus": {
+                              "type": "string",
+                              "nullable": true,
+                              "enum": ["ACTIVE", "INACTIVE", null],
+                              "description": "Whether the linked person's membership of the project is `ACTIVE` or `INACTIVE` (every status other than `ACTIVE` is reported as `INACTIVE`). `null` when the record is not linked."
+                            },
+                            "accessEndedAt": {
+                              "type": "string",
+                              "nullable": true,
+                              "description": "When the record was last unlinked from a person (ISO 8601, UTC), or `null` if it never was. Cleared again when someone accepts a new invitation. `NONE` with a value here means the supplier was removed; `NONE` with `null` means never invited."
+                            }
+                          },
+                          "required": [
+                            "userId",
+                            "invitationStatus",
+                            "roles",
+                            "membershipStatus",
+                            "accessEndedAt"
+                          ],
+                          "description": "Whether this record is linked to a person who can sign in, and what that person holds on the project. Tells a removed supplier (`accessEndedAt` set) from one who was never invited."
                         }
                       },
                       "required": [
@@ -24745,7 +24927,8 @@
                         "languages",
                         "locales",
                         "rating",
-                        "availability"
+                        "availability",
+                        "access"
                       ]
                     }
                   },
@@ -47058,7 +47241,7 @@
       "put": {
         "tags": ["ServiceBusinessModels"],
         "summary": "Update a business model",
-        "description": "Edits `paymentOptions`, `fees`, and `config` only. `type` is fixed at creation and there is no way to change it — to switch a service from one selling model to another, deactivate this one and add the model you want. All three fields are whole-value replacements: sending `paymentOptions` discards the previous list rather than merging into it, and sending `config` replaces the whole object. Omit a field entirely to leave it untouched. Sending `fees` likewise replaces the entire list: omit the field to leave configured fees untouched, send `[]` to clear them.",
+        "description": "Edits `paymentOptions`, `fees`, and `config` only. `type` is fixed at creation and there is no way to change it — to switch a service from one selling model to another, deactivate this one and add the model you want. All three fields are whole-value replacements: sending `paymentOptions` discards the previous list rather than merging into it, and sending `config` replaces the whole object. Omit a field entirely to leave it untouched. Sending `fees` likewise replaces the entire list: omit the field to leave configured fees untouched, send `[]` to clear them. An unknown `businessModelId` is a 404, and nothing is written.",
         "parameters": [
           {
             "schema": {
@@ -47393,6 +47576,16 @@
           },
           "403": {
             "description": "API key cannot access this project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Business model not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -48935,7 +49128,7 @@
       "put": {
         "tags": ["ServiceOfferings"],
         "summary": "Update an offering",
-        "description": "A partial update despite the verb: only the fields you send are written and the rest are left alone. Where a field is an array — `pricing`, `skillIds`, `locationIds`, `attributeValues` — sending it replaces the whole array, so add to a set by sending the full new one, never just the delta. Supplying `pricing` re-runs the same hierarchy and ISO coercion rules as create, so a partial rule set that drops the DEFAULT rule is a 400. This route does not verify the offering exists first and has no 404: a wrong `offeringId` writes a new, partial record rather than failing, so confirm the id before calling it.",
+        "description": "A partial update despite the verb: only the fields you send are written and the rest are left alone. Where a field is an array — `pricing`, `skillIds`, `locationIds`, `attributeValues` — sending it replaces the whole array, so add to a set by sending the full new one, never just the delta. Supplying `pricing` re-runs the same hierarchy and ISO coercion rules as create, so a partial rule set that drops the DEFAULT rule is a 400. An unknown or soft-deleted `offeringId` is a 404, and nothing is written.",
         "parameters": [
           {
             "schema": {
@@ -49438,6 +49631,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "Offering not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                }
+              }
+            }
           }
         }
       },
@@ -49524,7 +49727,7 @@
       "post": {
         "tags": ["ServiceOfferings"],
         "summary": "Change offering status",
-        "description": "Takes one variant off sale without touching the rest of the service. An INACTIVE offering stops accepting new bookings while bookings already made against it stand, so this is the safe way to retire a price point or a duration. Unlike service status there is no transition table — ACTIVE and INACTIVE move freely in both directions. Like the update route it does not check the offering exists, so an unknown `offeringId` writes a stub rather than returning 404.",
+        "description": "Takes one variant off sale without touching the rest of the service. An INACTIVE offering stops accepting new bookings while bookings already made against it stand, so this is the safe way to retire a price point or a duration. Unlike service status there is no transition table — ACTIVE and INACTIVE move freely in both directions. Unlike the update route it does not check the offering exists, so an unknown `offeringId` writes a stub rather than returning 404.",
         "parameters": [
           {
             "schema": {

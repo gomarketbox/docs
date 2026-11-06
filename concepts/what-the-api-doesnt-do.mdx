@@ -79,14 +79,17 @@ Until they accept, every supplier-plane call is refused:
 
 ```json
 {
-  "code": "FORBIDDEN",
-  "message": "No active membership on this project",
+  "code": "NOT_A_MEMBER",
+  "message": "You are not a member of this project.",
   "statusCode": 403,
   "requestId": "6a1d3f8e-2b7c-4e95-a0d4-9c5e1b7f3a28"
 }
 ```
 
-See [Supplier portal: sign-in and access](/guides/supplier-portal-sign-in-and-access).
+A person who already holds another role in the project, such as `CLIENT`, gets
+`NO_SUPPLIER_ROLE` instead. `GET /suppliers/me/access` reports either one with
+a `200`, so your portal can show the right message on sign-in. See
+[Supplier portal: sign-in and access](/guides/supplier-portal-sign-in-and-access#check-access-first).
 
 ## No creating Locations or skills
 

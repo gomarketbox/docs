@@ -347,9 +347,9 @@ booking itself.
 - **Store MarketBox's ids.** Services, offerings, business models and packages
   carry no id of yours, so keep `serviceId`, `offeringId`, `businessModelId`
   and `packageId` against your own records.
-- **Use the ids from the responses.** Updating or changing the status of an
-  offering or a business model doesn't check the id exists, so a mistyped id
-  doesn't return `404`.
+- **Use the ids from the responses.** Updating an offering or a business
+  model with an unknown id is `404 NOT_FOUND`. Changing its status doesn't
+  check the id exists, so a mistyped id there doesn't return `404`.
 - **Replace whole values on `PUT`.** On `PUT /services/{serviceId}`, `name`,
   `description` and `participantSettings` replace the stored value. Send the
   full object, not only the changed language.
