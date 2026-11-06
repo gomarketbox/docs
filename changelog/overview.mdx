@@ -3,6 +3,28 @@ title: "Changelog"
 description: "New features, updates, and fixes to the MarketBox API."
 ---
 
+<Update label="November 5, 2026" tags={["API"]}>
+
+## Unknown ids and a misplaced package line answer 4xx instead of 500
+
+Three caller mistakes that came back as `500 INTERNAL_ERROR` now return a code that says what to fix.
+
+**No breaking changes.** Each fix turns a `500` into a 4xx; no request that succeeded before is refused.
+
+**Fixed**
+
+- **`POST …/orders/{orderId}/items` with `skuType: "PACKAGE"`** is `400 VALIDATION_ERROR`: "skuType: a PACKAGE line can only be added when the order is created: send it in POST /orders items[] with a packageId". Nothing is written. The request schema no longer lists `PACKAGE` for this route.
+- **`POST …/availability/search` and `POST …/availability/suppliers` with an unknown id** are `404 NOT_FOUND`, naming it: "Service offering off_… not found on service srv_…" for an offering, or "Location loc_… not found" for a `locationId` sent without `lat`/`lng`.
+- **A search location with no coordinates** is `400 BAD_REQUEST`, "Could not resolve coordinates for the requested location".
+
+**What this means for you**
+
+- **Treat these as caller errors.** Don't retry them: fix the id, or add a package at order create.
+
+Full detail: [Order lifecycle after checkout](/guides/order-lifecycle-after-checkout), [Search suppliers by availability](/guides/search-suppliers-by-availability), [Errors](/concepts/errors).
+
+</Update>
+
 <Update label="November 3, 2026" tags={["API"]}>
 
 ## Clients can dispute attendance; delete refuses a real order; expired slates can't be held; booking writes answer 4xx instead of 500; stale availability versions are `VERSION_CONFLICT`
