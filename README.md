@@ -104,7 +104,19 @@ Open <http://localhost:3000>.
 Changes pushed to the default branch of
 [`gomarketbox/docs`](https://github.com/gomarketbox/docs) deploy
 automatically via the Mintlify GitHub app, installed on the `gomarketbox`
-org. The live site is <https://marketboxinc.mintlify.app>.
+org. The live site is <https://docs.gomarketbox.com>, served from Mintlify's
+default subdomain <https://marketboxinc.mintlify.app>.
+
+The custom domain is configured outside this repo:
+
+1. In the Mintlify dashboard, **Settings** → **Custom domain** is set to
+   `docs.gomarketbox.com`.
+2. The `gomarketbox.com` DNS zone has a `CNAME` record from `docs` to
+   `cname.mintlify-dns.com`. Mintlify issues the TLS certificate once the
+   record resolves.
+
+The MarketBox v1 platform's API docs are a separate site at
+<https://docs-v1.gomarketbox.com>; the landing page links to it.
 
 ## Resources
 

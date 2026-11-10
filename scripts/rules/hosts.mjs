@@ -26,6 +26,7 @@ const BASE_URL_FILE = 'snippets/base-url.mdx';
 const ALWAYS_ALLOWED = new Set([
   'app.gomarketbox.com',
   'docs.gomarketbox.com',
+  'docs-v1.gomarketbox.com', // index.mdx — docs for the MarketBox v1 platform's API
   'gomarketbox.com',
   'github.com',
   'openapi-generator.tech',
@@ -37,7 +38,7 @@ const ALWAYS_ALLOWED = new Set([
   // Added beyond the brief's seed list after grepping the real docs:
   'localhost', // CONTRIBUTING.md / README.md local-dev instructions ("mint dev")
   'mintlify.com', // README.md — the docs framework this site is built on
-  'marketboxinc.mintlify.app', // README.md — where Mintlify deploys main; docs.gomarketbox.com isn't pointed at it yet
+  'marketboxinc.mintlify.app', // README.md — Mintlify's default subdomain; docs.gomarketbox.com is the custom domain
   'bitbucket.org', // README.md — link to the mb-core source repo
   'mb-core.vercel.app', // dev dashboard — production app.gomarketbox.com isn't live yet
   'example.com', // RFC 2606 reserved placeholder host, used for made-up example values
