@@ -83,13 +83,6 @@ const NOT_CODES = new Set([
   // mb-core's transaction.api.ts). resources/transactions.mdx quotes that
   // message exactly, so an integrator can match it.
   'COMP_REASON_REQUIRED',
-  // Real 422 codes of the supplier plane's schedule routes (POST/PATCH
-  // .../suppliers/me/schedules), thrown from mb-core's shared
-  // packages/utils/src/availability/schedule-start-end-guard.ts and named in
-  // the routes' 422 descriptions, but missing from mb-core's
-  // apps/open-api-mb/src/utils/error-codes.ts, so docs-contract.json does not
-  // list them. Remove these two once mb-core adds them to the contract.
-  'START_END_LOCATIONS_DISABLED', 'SETTING_NOT_DELEGATED',
 ]);
 
 /** Recursively collects every string member of every `enum` array anywhere

@@ -230,7 +230,9 @@ call `stripe.confirmPayment`. Card details go straight from the browser to
 Stripe. See [Accept payments with Stripe](/guides/accept-payments-with-stripe).
 
 Calling it again for the same order reuses the open PaymentIntent, so a retry
-doesn't create a second charge. It also records a `PENDING` payment on the
+doesn't create a second charge. If the amount owed has changed since, the old
+intent is canceled and a new one is created, so always use the latest
+`clientSecret`. It also records a `PENDING` payment on the
 order, which matters if the client abandons: see
 [Abandoned checkout](#abandoned-checkout).
 

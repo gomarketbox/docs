@@ -3,6 +3,22 @@ title: "Changelog"
 description: "New features, updates, and fixes to the MarketBox API."
 ---
 
+<Update label="November 17, 2026 (reference corrections)" tags={["API"]}>
+
+## API reference corrections for the November 17 release
+
+The API reference now lists every error and field from the November 17 release. Nothing in the API's behaviour changed, so you don't need to change any requests.
+
+**Fixed**
+
+- **`POST …/orders/{orderId}/payment-intent`** lists `409 PAYMENT_IN_FLIGHT`. The reference also said a reused intent keeps its original amount. It doesn't: an open intent is reused only while it is for the amount owed now. When the amount owed changes, the old intent is canceled and a new one is created. Always use the `clientSecret` from the latest call. See [Accept payments with Stripe](/guides/accept-payments-with-stripe).
+- **`POST …/orders/{orderId}/transactions`** lists `422 ORDER_NOT_PAYABLE`: a `SUCCEEDED` `PAYMENT`, or a `COMP` adjustment, on a `CANCELLED` order.
+- **`disputeId` and `disputeStatus`** on transactions are described, including what each `disputeStatus` value means.
+- **`NOT_SELLABLE` on bookings, hold conversion and package bookings** — the reference said a service that isn't `LIVE` is refused. On these routes only an offering that isn't `ACTIVE` is refused, because they book an order item already bought. Both package-bookings routes now list the code.
+- **`START_END_LOCATIONS_DISABLED` and `SETTING_NOT_DELEGATED`** are in the list of error codes.
+
+</Update>
+
 <Update label="November 17, 2026" tags={["API"]}>
 
 ## Stricter booking and order rules, traffic-aware offered times, a buffer before each service, and schedule start and end locations
