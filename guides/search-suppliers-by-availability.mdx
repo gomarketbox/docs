@@ -142,6 +142,34 @@ someone. Filter them client-side if you only want bookable cards
 (`data.filter(s => s.days.length > 0)`).
 </Note>
 
+### Why there are fewer slots next to bookings
+
+Open slots leave time for the supplier to drive from the booking before and
+to the booking after. The drive is estimated from the straight-line
+distance and rounded up to 5 minutes. A booking within 50 m counts as the
+same place, so back-to-back times there are still offered.
+
+A few more rules shape the slots you get:
+
+- When a supplier's day has a break, each block of the day offers its own
+  first and last time.
+- Drives are timed with traffic, so rush-hour times can move later or
+  disappear.
+- A service's `bufferBeforeStartMinutes` leaves a gap before each job of
+  that service.
+- If the project uses start and end of day locations, a supplier's first and
+  last times can shift.
+
+See [How offered times are worked out](/resources/availability#how-offered-times-are-worked-out).
+
+<Warning>
+**A supplier named in `errors[]` has a partial result.** `days: []`, or
+fewer days than expected, can mean a drive couldn't be routed, not that the
+supplier is busy. Check `errors` before you show "no times this week". The
+[entries you can see](/resources/availability#what-errors-can-contain) each
+start with `SupplierError` or `SupplierWarning` and name the supplier.
+</Warning>
+
 ## Build the wall
 
 <Steps>
@@ -598,6 +626,9 @@ needs no service or offering, so it separates "nobody serves here" from
 | The location has no coordinates to search from | `BAD_REQUEST` | `400` | "Could not resolve coordinates for the requested location". Search with `lat` and `lng`, or ask the business to fix the Location. |
 | No supplier serves the service at that location | — | `200` | Not an error: `data` is `[]`. Widen the location/window, or verify coverage via `GET /suppliers?lat=&lng=` with the same point. |
 | Supplier matches but is fully booked in the window | — | `200` | Not an error: that supplier is returned with `days: []`. Filter client-side if you only want bookable cards. |
+| A drive couldn't be routed for a supplier | — | `200` | Not an HTTP error: `errors[]` carries `SupplierError (supplierId: sup_…): <error name>: route request failed`. That supplier's result is empty, so don't show them as busy. |
+| One of a supplier's bookings has invalid saved coordinates | — | `200` | `errors[]` carries a `SupplierError` naming the booking. Only that supplier is affected. Fix the booking's address. |
+| A start or end drive couldn't be routed | — | `200` | `errors[]` carries `SupplierWarning: a start or end drive could not be routed…`. Some of that supplier's times were left out; the rest are valid. |
 | API key can't access this project | — | `403` | Use a key scoped to `{projectId}`. See [Projects and scope](/concepts/projects-and-scope). |
 
 See [Errors](/concepts/errors) for the full envelope and code list, and

@@ -784,6 +784,8 @@ will not consume your own hold and returns `409 SLOT_HELD` naming the
 | A session's location is the wrong type, or another supplier's travel zone | `BAD_REQUEST` | `400` | `message` names the id. Book from the slate, which carries the right location. |
 | A session's `PHYSICAL` Location has no coordinates | `UNPROCESSABLE_ENTITY` | `422` | The business fixes the Location. Don't retry. |
 | The package's offering has no `DEFAULT` price rule | `OFFERING_NOT_PRICED` | `422` | The business adds one. Don't retry. |
+| A session's offering isn't `ACTIVE` | `NOT_SELLABLE` | `422` | "Offering off_… is INACTIVE and is not sold; only ACTIVE offerings take new bookings and orders". A credit already bought stays bookable when its service stops being `LIVE`, but not when its offering is deactivated. Don't retry. |
+| On order create: the service isn't `LIVE` or was deleted, or the offering isn't `ACTIVE` | `NOT_SELLABLE` | `422` | `message` names the id and its status. Sell another service or offering. Don't retry. |
 | `package-slate` with neither `packageId` nor `orderId` + `orderItemId`, or with both | `VALIDATION_ERROR` | `400` | Send exactly one source. |
 | `package-slate` for a credit with no sessions left | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | `409` | Nothing to plan. The credit is used up. |
 | `package-slate` for a credit whose `expiresAt` has passed | `PACKAGE_EXPIRED` | `409` | Nothing can be planned on it. |

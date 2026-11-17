@@ -111,8 +111,8 @@ so the change shows up to about an hour later.
 In that gap the booking still reads `SCHEDULED` or `STARTED`, and two things
 behave differently:
 
-- **Your key can't cancel it.** Cancelling is allowed only before
-  `bookingEndUtc`, or once the booking reads `AWAITING_CONFIRMATION`:
+- **Your key can't cancel it.** Your key can cancel only before
+  `bookingEndUtc`:
 
   ```json
   {
@@ -123,9 +123,12 @@ behave differently:
   }
   ```
 
-  Wait for the sweep, then cancel.
-- **The supplier can still report attendance**, and that settles the booking
-  directly.
+  Waiting for the sweep doesn't help: your key can't cancel an
+  `AWAITING_CONFIRMATION` booking either. Settle it instead, with `COMPLETED`
+  (from `STARTED`) or a no-show. See
+  [When a booking can be cancelled](/guides/cancel-or-reschedule-a-booking#when-a-booking-can-be-cancelled).
+- **Attendance can already be reported**, by the supplier or by your key, and
+  a `SUPPLIER` report settles the booking directly.
 
 Polling ended bookings more often than every 15 minutes gains you nothing,
 because the source moves hourly.
@@ -133,7 +136,8 @@ because the source moves hourly.
 ## A booking is settled, or disputed
 
 The supplier's attendance report settles a booking: `COMPLETED` when they
-attended, `SUPPLIER_NO_SHOW` when they didn't. A client's report that they
+attended, `SUPPLIER_NO_SHOW` when they didn't. A `SUPPLIER` report your key
+files through `POST /bookings/{bookingId}/reports` does the same. A client's report that they
 didn't attend turns the booking `DISPUTED` when the supplier says they did. It
 also turns a `COMPLETED` booking `DISPUTED` within **24 hours** of it
 becoming `COMPLETED`, whoever completed it.

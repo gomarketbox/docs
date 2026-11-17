@@ -157,6 +157,90 @@ never acted on: `X-MB-Session-Key` (an opaque session key, at most 64
 characters) and `X-MB-Client-Kind` (`browser`, `server`, `monitor` or
 `loadtest`).
 
+## How offered times are worked out
+
+These rules apply to `/search`, `/suppliers` and `/time-slots`.
+
+### Travel fields on a slot
+
+Each suggested slot in `timeSlots[]` says how it was placed:
+
+| Field | Meaning |
+| --- | --- |
+| `travelType` | What the slot was placed against: `FROM-PREVIOUS-BOOKING`, `TO-NEXT-BOOKING`, `SAME-LOCATION-AS-PREVIOUS`, `SAME-LOCATION-AS-NEXT`, `ON-EMPTY-DAY`, `FROM-START-LOCATION` or `TO-END-LOCATION`. |
+| `travelTimeMins` | The drive, timed for the time of day it happens (with traffic). It never includes a service's `bufferBeforeStartMinutes`. |
+| `travelDistance` | The distance of the drive the slot was placed on, in `distanceUnit`. `null` means the drive is unknown. |
+
+Accept every `travelType` value. The start and end values appear only when
+the project uses [start and end of day locations](#start-and-end-of-day-locations).
+
+### Split shifts
+
+When a supplier's day has a break, each block of the day is treated on its
+own. A break comes from two time ranges on one weekday, two schedules on one
+date, or blocked time in the middle of a range.
+
+Each block offers its own first and last time. On an empty day of 9:00–13:00
+and 15:00–18:00, a 30-minute service is offered at 9:00, 12:30, 15:00 and
+17:30. Ranges that touch, such as 9:00–13:00 and 13:00–17:00, are one block.
+
+A `FROM-PREVIOUS-BOOKING` or `TO-NEXT-BOOKING` time can be on the other side
+of a break. Don't assume it comes right after, or right before, the booking
+it refers to. `travelTimeMins` still gives the real drive.
+
+### Open slots leave time to drive
+
+Open slots leave time for the supplier to drive from the booking before and
+to the booking after. That drive is an estimate from the straight-line
+distance, rounded up to 5 minutes. A booking within 50 m of the requested
+place counts as the same place, so back-to-back times there are still
+offered. Your project's open-slot buffer applies on top.
+
+Where roads are slower than the estimate, an open slot can still need an
+override when staff book it.
+
+### Drive times account for traffic
+
+Each drive is timed for the time of day it happens. A drive at rush hour
+takes longer, so rush-hour times can move later or disappear. The supplier's
+maximum travel time is checked against the drive with traffic. Don't cache
+drive times across times of day.
+
+### A buffer before the service
+
+A service's `bufferBeforeStartMinutes` (0–120) leaves a gap before a job of
+that service in suggested times. It isn't busy time, and it isn't part of
+`travelTimeMins`. A booking made at a specific time is never refused because
+of it.
+
+### Start and end of day locations
+
+A project can let a supplier's schedule set where their working day starts
+and ends. It's off by default. See
+[Start and end of day locations](/guides/supplier-portal-availability#start-and-end-of-day-locations).
+
+Once it's on and a supplier has set locations:
+
+- The first and last times of a day can shift, because the drive from the
+  start location and to the end location counts.
+- Slots can carry `FROM-START-LOCATION` or `TO-END-LOCATION`.
+- A slot with `travelDistance: null` was placed against a drive that couldn't
+  be routed. On such a slot, `travelTimeMins: 0` doesn't mean there's no
+  travel.
+- No availability response contains a supplier's start or end address or
+  coordinates.
+
+### What `errors[]` can contain
+
+`errors[]` entries are strings. A supplier named in one has a partial or
+empty result. That doesn't mean they have no availability.
+
+| Entry starts with | Meaning |
+| --- | --- |
+| `SupplierError (supplierId: sup_…): <error name>: route request failed` | A drive this supplier needed couldn't be routed. The supplier has no slots in this result. |
+| `SupplierError (supplierId: sup_…): Booking bk_… has coordinates outside the valid range` | One of this supplier's bookings has invalid saved coordinates. Only this supplier is affected. Fix the booking's address. |
+| `SupplierWarning: a start or end drive could not be routed` | At least one of this supplier's times was left out because a start or end drive couldn't be routed. The rest of their times are valid. |
+
 ## Recurring search
 
 To find a repeating slot pattern, set `bookingType` to `recurring`
@@ -215,7 +299,19 @@ The body is `{ config, suppliers[] }`:
   `bookings[]`, and `blockedTime[]`.
 
 Omitting `suppliers` is a `400`. The response adds `metrics` and `kpis`
-to the slot list:
+to the slot list.
+
+- `metrics.totalTravelTimeRequestsMade` counts the distinct drives
+  (direction, place) answered for the whole request, shared across all
+  suppliers. A failed or unroutable drive isn't counted.
+- Each slot's `travelDistance` is the distance of the drive the slot was
+  placed on.
+- A recurring availability window in a zone ahead of UTC lands on the
+  weekdays you wrote. For example, a Monday window at `09:00+11:00` is
+  served on Mondays.
+- Counts and slot distances changed on 2026-11-12. A payload captured before
+  then can replay with different counts, distances and labels, and can gain
+  slots.
 
 ```json
 {
@@ -375,7 +471,7 @@ whole request.
 | ------ | -------------------------------------------------------------------- |
 | `400`  | Missing location, missing `rrule` on a recurring request, recurring `rrule` without `COUNT`, a `timezone` that is not an IANA identifier, a `lookAheadStartDate` that does not parse, a package `lookAheadStartDate` using `Z`, or `time-slots` without `suppliers`. |
 | `403`  | Missing or unrecognised API key — rejected at the edge, before any scope check — or a key that cannot access this project, or one without Standard API access (`CAPABILITY_NOT_GRANTED`). |
-| `404`  | `package-options` — the service doesn't exist in this project. `package-slate` — the package, or the credit's order item, doesn't exist. |
+| `404`  | `/search` and `/suppliers` — no offering for this `serviceId`/`offeringId`, or no location for this `locationId` (sent without `lat`/`lng`); the message names the id. `package-options` — the service doesn't exist in this project. `package-slate` — the package, or the credit's order item, doesn't exist. |
 | `409`  | `package-slate` only — the credit can't be planned: no sessions left (`ORDER_ITEM_QUANTITY_UNAVAILABLE`), expired (`PACKAGE_EXPIRED`), or on a cancelled order (`ORDER_CANCELLED`). |
 | `422`  | `package-slate` only — nothing bookable: no `primarySlate`, no `partial`, and no `cadenceAlternatives`. The `code` is `NO_COMPLETE_SLATE` or `NO_AVAILABILITY`. |
 

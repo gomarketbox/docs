@@ -134,8 +134,10 @@ Only a payment or comp recording does, or MarketBox's nightly reconciliation:
   `amountPaid` no longer matches.
 - On a part-paid order, removing an item can bring the total down to what's
   already paid. The order stays unsettled until the next payment or comp, or
-  the nightly reconciliation. A card can't finish it: the payment page
-  refuses an order with nothing left to pay, `Order is already fully paid`.
+  the nightly reconciliation. A card can't finish it:
+  `POST .../orders/{orderId}/payment-intent` refuses an order with nothing
+  left to pay, `400`,
+  `Nothing is owed on this order: it is already paid or comped in full`.
 
 Each item route returns the whole order with its new totals.
 
@@ -170,7 +172,9 @@ here is refused before anything is written:
 To sell another package, create a new order with the `PACKAGE` line in
 `items`. See [Selling a package](/resources/packages#selling-a-package).
 
-A service with no active rate for the line is `422 SERVICE_NOT_SOLD_AS`. See
+A service with no active rate for the line is `422 SERVICE_NOT_SOLD_AS`. A
+service that isn't `LIVE`, or an offering that isn't `ACTIVE`, is
+`422 NOT_SELLABLE`. See
 [Creating an order](/resources/orders#creating-an-order).
 
 ### Change a quantity
@@ -222,6 +226,8 @@ account your key belongs to as `cancelledBy`.
 
 **Cancelling doesn't refund.** Money already recorded stays on the ledger,
 and `amountPaid` doesn't change. Refunds are made in the MarketBox dashboard.
+A cancelled order takes no new money: recording a payment or comp on it is
+`422 ORDER_NOT_PAYABLE`.
 The public API has no refund route.
 
 **Cancelling is final.** No route reopens a `CANCELLED` order. To sell again,
@@ -306,8 +312,10 @@ An order that never reached payment and booked nothing can be deleted. See
 | Booking from a cancelled order | `ORDER_CANCELLED` | `409` | Don't retry. Create a new order. |
 | A client booking an unpaid package credit | `CREDIT_NOT_BOOKABLE` | `409` | Wait for `PAID`, or record the payment. |
 | A card payment on a `PAID` or `CANCELLED` order | `BAD_REQUEST` | `400` | Nothing to pay. |
+| Recording a payment or comp on a `CANCELLED` order | `ORDER_NOT_PAYABLE` | `422` | Don't retry. Sell on a new order. |
 | Adding a `PACKAGE` line to an existing order | `VALIDATION_ERROR` | `400` | Create a new order with the `PACKAGE` line. |
 | Listing package bookings without `orderItemId`, or for a removed line | `VALIDATION_ERROR` / `NOT_FOUND` | `400` / `404` | Send the line's `orderItemId`, and read it before you remove the line. |
 | An item on a service with no active rate for it | `SERVICE_NOT_SOLD_AS` | `422` | Activate the rate in the MarketBox console. |
+| An item on a service that isn't `LIVE`, or an offering that isn't `ACTIVE` | `NOT_SELLABLE` | `422` | Publish the service, or set the offering `ACTIVE`. |
 | Deleting an order with a booking or money | `ORDER_NOT_DELETABLE` | `409` | Cancel it instead. |
 | A booking still reads `SCHEDULED` after the cancel | — | `200` | The cascade is asynchronous. Read again in a few seconds. |

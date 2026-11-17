@@ -82,6 +82,11 @@ after every sign-in. It's idempotent:
 | A client with the person's email, linked to someone else. | Refused. The person is still added as a member of the project. | `409` |
 | Nothing. | Creates the client. When the project has Stripe connected, it also creates the client's record in Stripe. | `201` |
 
+A person who is already a member of the project, such as an admin or a
+supplier, becomes a client too. Onboarding adds the `CLIENT` role to their
+membership and keeps their other roles. The response is the same as for
+anyone else.
+
 There is no `GET /clients/me`. To read the profile, call `POST /clients/me`
 with no body. It writes nothing and returns the profile.
 
@@ -136,8 +141,9 @@ each route returns a `403`:
 }
 ```
 
-A member of the project with no client profile, such as a staff member, gets
-`404 NOT_FOUND`, `No client profile for this project`, instead. On
+A member of the project with no client profile, such as a staff member who
+hasn't called `POST /clients/me`, gets `404 NOT_FOUND`,
+`No client profile for this project`, instead. On
 `PATCH /clients/me` the message adds `POST /clients/me first`.
 
 The profile and address routes are covered in full in

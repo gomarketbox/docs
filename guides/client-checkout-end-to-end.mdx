@@ -22,8 +22,8 @@ a specific error:
 
 | You need | Without it |
 | --- | --- |
-| A service with `status: "LIVE"`. | Supplier profiles leave it out of their `services`, in `GET /suppliers` and on every search result, so your storefront can't show who offers it. |
-| An `ACTIVE` offering of that service, with exactly one `DEFAULT` price rule. | `POST /orders` is `422 OFFERING_NOT_PRICED`, or `400 BAD_REQUEST` for an offering that isn't `ACTIVE`. |
+| A service with `status: "LIVE"`. | `POST /orders` is `422 NOT_SELLABLE`. Supplier profiles also leave it out of their `services`, in `GET /suppliers` and on every search result, so your storefront can't show who offers it. |
+| An `ACTIVE` offering of that service, with exactly one `DEFAULT` price rule. | `POST /orders` is `422 OFFERING_NOT_PRICED`, or `422 NOT_SELLABLE` for an offering that isn't `ACTIVE`. |
 | An `ACTIVE` `SINGLE_BOOKING` business model on the service (`PACKAGE` to sell packages). | `POST /orders` is `422 SERVICE_NOT_SOLD_AS`. |
 | A supplier linked to the service, with an `ACTIVE` schedule for the offering. | Search doesn't offer that supplier. |
 | A place: a `PHYSICAL` Location for venue sessions, or a travel zone on the supplier's schedule for in-home ones. | Search returns nobody for that place. See [Set up a mobile supplier's service area](/guides/set-up-a-mobile-supplier-service-area). |
@@ -211,8 +211,9 @@ the id is not at `data.orderId`. The order starts `DRAFT`.
 - `attribution` ties the purchase to the search it came from. See
   [Attribution](/resources/orders#attribution).
 
-**Fails with:** `422 OFFERING_NOT_PRICED` and `422 SERVICE_NOT_SOLD_AS` (a
-setup problem: see [Before you start](#before-you-start); don't retry), and
+**Fails with:** `422 OFFERING_NOT_PRICED`, `422 SERVICE_NOT_SOLD_AS` and
+`422 NOT_SELLABLE` (a setup problem: see [Before you start](#before-you-start);
+don't retry), and
 `404 NOT_FOUND` with `Client not found` for a `clientId` that isn't in this
 project.
 </Step>
@@ -239,8 +240,11 @@ order, which matters if the client abandons: see
   business's Stripe account isn't connected, or can't take charges yet.
 - `400 BAD_REQUEST`, `Order ord_… is CANCELLED; cannot take payment`: only a
   `DRAFT` or `PENDING` order takes a payment.
-- `400 BAD_REQUEST`, `Order is already fully paid`: nothing is owed. Skip the
-  payment step.
+- `400 BAD_REQUEST`,
+  `Nothing is owed on this order: it is already paid or comped in full`. Skip
+  the payment step.
+- `409 PAYMENT_IN_FLIGHT`: a card payment on this order is already moving.
+  Don't start another. Poll the order until it's `PAID`.
 </Step>
 
 <Step title="Wait for PAID, then convert the hold">
@@ -285,6 +289,8 @@ same bookings; it never books twice.
 - `409 SLOT_BOOKED`: someone took the time after your hold lapsed. Offer the
   client a new time and convert a new hold against the same order item.
 - `409 ORDER_CANCELLED`: the order was cancelled. Don't retry.
+- `422 NOT_SELLABLE`: the offering was set `INACTIVE` or deleted after the
+  order was placed. A service that left `LIVE` doesn't block convert.
 
 If the client paid and you can't book them, the money stays on the order.
 The public API has no refund endpoint: the business refunds from the
@@ -379,12 +385,15 @@ cancelling it later, see
 | Hold | `400 VALIDATION_ERROR` | Send every location field the `locationType` needs. See [Hold slots during checkout](/guides/hold-slots-for-checkout#troubleshooting). |
 | Order | `422 OFFERING_NOT_PRICED` | The offering needs a `DEFAULT` price rule. Fix the setup. |
 | Order | `422 SERVICE_NOT_SOLD_AS` | The service needs an active `SINGLE_BOOKING` business model. Fix the setup. |
+| Order | `422 NOT_SELLABLE` | The service isn't `LIVE`, or the offering isn't `ACTIVE`. Fix the setup. |
 | Order | `400 BAD_REQUEST`, `Item … currency … does not match order currency …` | The region resolved a different price. Pass `reservationId`. |
 | Pay | `409 CONFLICT` | The business finishes Stripe onboarding. |
 | Pay | `400 BAD_REQUEST` | The order isn't `DRAFT` or `PENDING`, or nothing is owed. |
+| Pay | `409 PAYMENT_IN_FLIGHT` | A card payment on the order is already moving. Poll the order. |
 | Convert | `409 HOLD_EXPIRED` | Hold again, then convert. |
 | Convert | `409 SLOT_BOOKED` | Offer a new time; convert a new hold against the same order item. |
 | Convert | `409 ORDER_CANCELLED` | Don't retry. |
+| Convert | `422 NOT_SELLABLE` | The offering is no longer `ACTIVE`. Set it `ACTIVE`, or refund from the dashboard. |
 | Convert | `404 NOT_FOUND`, `Location stz_… not found` | The hold has the wrong `locationType`. See [the travel-zone walkthrough](/guides/hold-slots-for-checkout#a-travel-zone-checkout-end-to-end). |
 | Any | `409 OCCUPANCY_CONTENTION` | Retry after a short backoff. |
 | Abandon | `409 ORDER_NOT_DELETABLE` | Cancel the order with a `cancellationReason` instead. |

@@ -190,7 +190,13 @@ items keep the price they were captured at.
 
 The server validates:
 
-- Every offering exists and is `ACTIVE` (else 404 / 400).
+- Every offering exists (else 404). A deleted offering counts as not found.
+- Every line is sellable: its service is `LIVE` and not deleted, and its
+  offering is `ACTIVE`. Otherwise the order is a `422 NOT_SELLABLE`, and
+  nothing is written. The same check runs on
+  `POST .../orders/{orderId}/items`.
+- Every `PACKAGE` line names an `ACTIVE` package. A `DRAFT` or `ARCHIVED`
+  package is a `422 PACKAGE_NOT_ACTIVE`.
 - Every offering's currency equals the order's currency (else 400).
 - `clientId` belongs to this project. A client from another project is a
   `404 NOT_FOUND`, and nothing is written.
@@ -211,6 +217,40 @@ The server validates:
 Previously such a line was written with no rate attached, and so priced without
 the rate's fees. Activate the rate in the MarketBox console, or sell the service
 another way.
+
+A line for a service that isn't `LIVE` is refused like this. The `message`
+names what stopped the sale:
+
+```json
+{
+  "code": "NOT_SELLABLE",
+  "message": "Service srv_01kv60qg12e82acr78edfnjhvv is INACTIVE and is not sold; only LIVE services take new bookings and orders",
+  "statusCode": 422,
+  "requestId": "2d9f6a13-8b4e-4c07-9e51-6f3a2b8c1d40"
+}
+```
+
+The other messages are:
+
+- `Service srv_… was deleted and is no longer sold`
+- `Offering off_… is INACTIVE and is not sold; only ACTIVE offerings take new bookings and orders`
+
+Publish the service, or set the offering `ACTIVE`, then retry. Retiring a
+service stops new sales only. Order items already bought stay bookable after
+the service leaves `LIVE`, as long as their offering is still `ACTIVE`.
+
+A `PACKAGE` line for a package that isn't on sale is refused the same way:
+
+```json
+{
+  "code": "PACKAGE_NOT_ACTIVE",
+  "message": "Package pkg_01kv61b3x8m2q4r6t8v0w2y4z6 is ARCHIVED and cannot accept new orders",
+  "statusCode": 422,
+  "requestId": "8e4c1b7a-3f92-4d65-a0b8-5c2e9d1f7a36"
+}
+```
+
+Orders already placed for the package keep their sessions, and stay bookable.
 
 Each item carries `priceSource`. `RULE` means the `unitPrice` came from the
 offering or package pricing rules (see `priceRuleId`). `MANUAL` means staff set
@@ -393,7 +433,7 @@ the transaction object, its kinds, and listing the ledger, see
 | Send | Lists | Narrow with |
 | --- | --- | --- |
 | `status` | Orders in that status. | `startCreatedAt`, `endCreatedAt` |
-| `paymentMethod` | Settled orders, by how they were paid. `DRAFT` and `PENDING` orders never appear. This is the reconciliation read: "what did we take in cash last month?" | `startSettledAt`, `endSettledAt` |
+| `paymentMethod` | Settled orders, by how they were paid. `DRAFT` and `PENDING` orders never appear. A settled order you later cancelled still appears, refunded or not, with `status: "CANCELLED"`. This is the reconciliation read: "what did we take in cash last month?" | `startSettledAt`, `endSettledAt` |
 | Neither | Every order. | `startCreatedAt`, `endCreatedAt` |
 
 Start bounds are inclusive. End bounds are **exclusive**, so pass the next

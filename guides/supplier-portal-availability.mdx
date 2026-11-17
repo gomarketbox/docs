@@ -118,6 +118,9 @@ Before a schedule is saved, the API checks it. Each check below that fails is a
   both.
 - Each venue and zone exists in the project, with the type you named.
 
+The start and end fields have two `422` refusals of their own. See
+[Start and end of day locations](#start-and-end-of-day-locations).
+
 Two `409` cases to handle. Branch on `code`, because the status is the same:
 
 - `CONFLICT`: an `ACTIVE` schedule may not overlap another `ACTIVE` one.
@@ -130,7 +133,84 @@ Blocked time and travel zones answer a stale `version` the same way, with
 `409 VERSION_CONFLICT`.
 
 Deleting a schedule whose `travelZoneRef` names one of the supplier's own zones
-(`SUPPLIER_TRAVEL_ZONE`) soft-deletes that zone too.
+(`SUPPLIER_TRAVEL_ZONE`) soft-deletes that zone too, but only when no other
+schedule of that supplier still uses it. A paused (`INACTIVE`) schedule
+counts. The response is `204` either way.
+
+### Start and end of day locations
+
+A schedule can say where the supplier's working day starts and ends, for
+example their home. MarketBox then counts the drive from the start location
+to the day's first booking, and from the last booking to the end location.
+
+The feature is off by default, and the project turns it on. A schedule
+carries five optional fields for it. An unset field can be absent from the
+response, so treat absent the same as `null`.
+
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `startLocation` | `{ address, latitude, longitude }` or `null` | Where the supplier starts each working day under this schedule. |
+| `endLocation` | The same shape, or `null` | Where the supplier ends each working day. |
+| `driveTiming` | `INSIDE_HOURS`, `OUTSIDE_HOURS` or `null` | Whether the drive to the first booking and from the last counts inside or outside working hours. `null` uses the project default. |
+| `maxTravelOnStartDrive` | `true`, `false` or `null` | Whether the supplier's maximum travel time limits the start drive. `null` uses the project default. |
+| `maxTravelOnEndDrive` | `true`, `false` or `null` | Whether the supplier's maximum travel time limits the end drive. `null` uses the project default. |
+
+MarketBox doesn't geocode these locations, so send `latitude` and
+`longitude` yourself. `address` needs `addressOneLine`, `streetNumber`,
+`streetName`, `city`, `state`, `country` and `zipCode`. `unitNumber` is
+optional.
+
+```json
+// PATCH /v1/projects/{projectId}/suppliers/me/schedules/{scheduleId}
+{
+  "version": 3,
+  "startLocation": {
+    "address": {
+      "addressOneLine": "10 Main St, Toronto, ON M5V 1A1, Canada",
+      "streetNumber": "10",
+      "streetName": "Main St",
+      "city": "Toronto",
+      "state": "ON",
+      "country": "CA",
+      "zipCode": "M5V 1A1"
+    },
+    "latitude": 43.6426,
+    "longitude": -79.3871
+  },
+  "endLocation": null,
+  "driveTiming": "OUTSIDE_HOURS"
+}
+```
+
+On `PATCH`, a field you leave out keeps its stored value, and `null` clears
+it. Cloning a schedule copies all five fields.
+
+Two `422` refusals guard these fields:
+
+| `code` | When |
+| --- | --- |
+| `START_END_LOCATIONS_DISABLED` | The project has start and end locations off, so a value can't be set. |
+| `SETTING_NOT_DELEGATED` | The project hasn't let suppliers choose this setting. Only `driveTiming`, `maxTravelOnStartDrive` and `maxTravelOnEndDrive` are delegated, each separately. |
+
+```json
+{
+  "code": "SETTING_NOT_DELEGATED",
+  "message": "driveTiming is set by the project and is not delegated to suppliers",
+  "statusCode": 422,
+  "requestId": "9d2e6b4a-3c1f-4e87-a5b0-7f1c8d3e2a96"
+}
+```
+
+The `START_END_LOCATIONS_DISABLED` message names the field:
+"Start and end locations are not enabled for this project, so startLocation
+cannot be set".
+
+Sending `null`, or the value already stored, never causes either refusal.
+A portal that sends a whole schedule back on `PATCH` keeps working.
+
+Availability responses never contain a supplier's start or end address or
+coordinates. For what changes in offered times, see
+[Start and end of day locations](/resources/availability#start-and-end-of-day-locations).
 
 ### Block time off
 

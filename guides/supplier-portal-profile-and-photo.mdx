@@ -76,3 +76,22 @@ Any other field the schema doesn't list is a `400 VALIDATION_ERROR`.
 The image is resized after it lands, so step 3 often answers
 `400 BAD_REQUEST` with "Avatar variant not ready yet. Retry shortly." That is a
 retry signal: wait a second or two and call again.
+
+Confirming a different `variantId` replaces the current photo and deletes the
+old images for good. Re-confirming the same one is harmless. To swap a photo,
+confirm the new one instead of removing the old one first.
+
+If another confirm or remove changes the photo while yours is being saved,
+`PUT /avatar` and `DELETE /avatar` answer `409`:
+
+```json
+{
+  "code": "CONFLICT",
+  "message": "This supplier's photo changed while it was being saved. Reload and try again.",
+  "statusCode": 409,
+  "requestId": "5b8e2d1f-7c4a-4e36-9a0b-2f6d8c1e3a57"
+}
+```
+
+Read the profile again with `GET /suppliers/me`, then retry if the photo
+still isn't the one the supplier chose.

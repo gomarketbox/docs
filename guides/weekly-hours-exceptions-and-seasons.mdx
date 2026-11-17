@@ -41,7 +41,15 @@ rows you write here:
    like a booking until it lapses or converts.
 
 Busy events from a connected Google Calendar are subtracted too. Travel time
-and buffers around bookings are applied on top. `INACTIVE` and deleted rows are
+and buffers around bookings are applied on top.
+
+When these steps leave a break in a day, each block of the day is treated on
+its own. Two ranges on one weekday, two schedules on one date, or blocked time
+in the middle of a range each make a break. Every block offers its own first
+and last time. With hours of 9:00–13:00 and 15:00–18:00, a 30-minute service
+can start at 12:30 and at 15:00. Ranges that touch, such as 9:00–13:00 and
+13:00–17:00, are one block. See
+[How offered times are worked out](/resources/availability#how-offered-times-are-worked-out). `INACTIVE` and deleted rows are
 ignored. None of these steps is cached, so a change to hours or blocked time
 shows in the next availability search.
 
@@ -205,7 +213,8 @@ date ranges overlap, the new season can't be switched on.
 
 <Step title="Clone it">
 `POST /schedules/{scheduleId}/clone` takes no body. It copies the schedule's
-hours, offerings, venues and zone into a new row, with a new `sch_` id and
+hours, offerings, venues, zone, and any start and end of day locations into
+a new row, with a new `sch_` id and
 `status: "INACTIVE"`:
 
 ```
@@ -243,12 +252,13 @@ the original, and is refused with `409 CONFLICT`.
 </Step>
 </Steps>
 
-**Don't delete a season you cloned from.** A clone names the same travel zone
-as its original. Deleting a schedule whose `travelZoneRef` names one of the
-supplier's own zones soft-deletes that zone too. The other season then names a
-deleted zone, and quietly stops covering clients' addresses. Its venues still
-work. To retire a season, let its `endDate`
-pass, or set its `status` to `INACTIVE`. See
+**Deleting a season you cloned from keeps the shared zone.** A clone names
+the same travel zone as its original. Deleting a schedule whose
+`travelZoneRef` names one of the supplier's own zones soft-deletes that zone
+only when no other schedule of the supplier still uses it. A paused
+(`INACTIVE`) schedule counts. So the other season keeps its zone. To retire a
+season without deleting it, let its `endDate` pass, or set its `status` to
+`INACTIVE`. See
 [Remove a zone, or stop working in it](/guides/set-up-a-mobile-supplier-service-area#remove-a-zone-or-stop-working-in-it).
 
 ### When a save is refused with `409`
@@ -477,7 +487,7 @@ it.
 | `apply-profile` with no profile or project zone | `BAD_REQUEST` | `400` | Set the supplier's profile `timezone` first. |
 | A range offered on no day | — | — | Its `dayOfWeek` isn't in `BYDAY`. Add the day to the rule. |
 | Time off saved, but a booking still sits in it | — | — | Blocked time doesn't move bookings. Reschedule or cancel them. |
-| The other season stopped covering client addresses after a delete | — | — | Deleting a schedule deleted the travel zone both seasons shared. Create a new zone and point the season at it. |
+| A season stopped covering client addresses | — | — | Its travel zone was deleted, either directly or with the last schedule that used it. Create a new zone and point the season at it. |
 
 See [Errors](/concepts/errors) for the envelope,
 [Concurrency](/concepts/concurrency#optimistic-versioning-on-updates) for

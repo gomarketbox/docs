@@ -228,6 +228,36 @@ Because this gets clicked from an email, **resubmitting is safe**:
 those unchanged with different text returns 200 with the record **as stored**, original note
 included. A filed report cannot be edited.
 
+**A report settles the booking**, exactly as the same answer does in the MarketBox dashboard:
+
+| Report | Effect on the booking |
+| --- | --- |
+| `SUPPLIER`, `attended: true` | `COMPLETED`, or `DISPUTED` when the client has already reported that they didn't attend |
+| `SUPPLIER`, `attended: false` | `SUPPLIER_NO_SHOW` |
+| `CLIENT`, `attended: false`, on a booking that became `COMPLETED` within the last 24 hours | `DISPUTED` |
+| Any other `CLIENT` report | Recorded only |
+
+See [Attendance and disputes](/resources/bookings#attendance-and-disputes).
+
+**A report can be filed only once the session has ended.** Otherwise it's
+`422 BOOKING_NOT_REPORTABLE`, and nothing is written:
+
+- before the session ends: "This booking cannot be reported on until its session has ended"
+- on a `CANCELLED` booking: "A cancelled booking cannot be reported on"
+- a `SUPPLIER` report on a booking that's already settled: "This booking is already settled, so a supplier report can no longer change it"
+
+```json
+{
+  "code": "BOOKING_NOT_REPORTABLE",
+  "message": "This booking is already settled, so a supplier report can no longer change it",
+  "statusCode": 422,
+  "requestId": "3f8a1c6d-7e24-4b95-a2d0-9c5e1b7f4a63"
+}
+```
+
+A supplier who clicks an old email after an operator settled the booking gets that last one. Show
+them the booking's current `status` instead of an error.
+
 `GET /v1/projects/{projectId}/bookings/{bookingId}/reports` returns both sides' reports.
 
 ## Averages
@@ -291,7 +321,8 @@ review to compute a star rating yourself.
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `NOT_FOUND` | 404 | No such booking in this project. |
-| `UNPROCESSABLE_ENTITY` | 422 | The booking is cancelled, or has no supplier assigned. |
+| `UNPROCESSABLE_ENTITY` | 422 | A review on a cancelled booking, or a review or `SUPPLIER` report on a booking with no supplier assigned. |
+| `BOOKING_NOT_REPORTABLE` | 422 | A report before the session ended, on a cancelled booking, or a `SUPPLIER` report on a booking already settled. Nothing was written. |
 | `REVIEW_ALREADY_EXISTS` | 409 | This side has already reviewed this booking. |
 | `REPORT_ALREADY_EXISTS` | 409 | This side has already filed a different report. |
 | `VALIDATION_ERROR` | 400 | The body failed validation. |

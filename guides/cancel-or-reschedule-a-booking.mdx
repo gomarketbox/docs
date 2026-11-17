@@ -63,8 +63,13 @@ staff. Your `cancellationReason` stays on the booking and isn't in the email.
 
 | The booking drew on | Leave out `creditTreatment` | `RETURN` | `FORFEIT` |
 | --- | --- | --- | --- |
-| A `PACKAGE` order item | The session goes back on the package. | Same, stated explicitly. | The session stays spent, for example for a late cancellation. |
+| A `PACKAGE` order item | The session goes back on the package (`RETURN`). | Same, stated explicitly. | The session stays spent, for example for a late cancellation. |
 | A `SINGLE_SESSION` order item | The session is closed. Nothing comes back. | Refused. | Refused. |
+
+Your key can cancel only a session still to come, so the default for your
+cancel is `RETURN`. A session that has already taken place
+(`AWAITING_CONFIRMATION`, `DISPUTED`) defaults to `FORFEIT` instead. Only an
+operator can cancel one of those.
 
 A single session has no credit to return or forfeit, so naming one is refused,
 and nothing is cancelled:
@@ -91,7 +96,7 @@ back, the business refunds them in the dashboard.
 | The booking is | Your key can cancel it |
 | --- | --- |
 | `SCHEDULED` or `STARTED` | Until `bookingEndUtc`. |
-| `AWAITING_CONFIRMATION` | Yes. |
+| `AWAITING_CONFIRMATION` | No. The session has taken place, and cancelling it would void the supplier's claim to be paid. Settle it instead. |
 | `DISPUTED` | No. An operator resolves it in the MarketBox console. |
 | `COMPLETED`, `CLIENT_NO_SHOW`, `SUPPLIER_NO_SHOW` | No. |
 | `CANCELLED` | No. It's final. |
@@ -101,18 +106,36 @@ Anything else is a `400` that names the booking's current status:
 ```json
 {
   "code": "BAD_REQUEST",
-  "message": "Cannot transition booking status from COMPLETED to CANCELLED",
+  "message": "Cannot transition booking status from AWAITING_CONFIRMATION to CANCELLED",
   "statusCode": 400,
   "requestId": "7d3a9e2c-1f5b-4c68-a0e4-6b2d8f1c3a95"
 }
 ```
 
-**There's a gap of up to an hour after a session ends.** A booking moves to
-`AWAITING_CONFIRMATION` in an hourly sweep, not at `bookingEndUtc`. Until the
-sweep reaches it, it still reads `SCHEDULED`, it's past its end, and a cancel
-is the `400` above, `from SCHEDULED to CANCELLED`. Wait for it to read
-`AWAITING_CONFIRMATION`, then cancel. See
+**Once `bookingEndUtc` has passed, your key can't cancel.** It doesn't matter
+what the booking reads. A booking moves to `AWAITING_CONFIRMATION` in an
+hourly sweep, not at `bookingEndUtc`. Until the sweep reaches it, it still
+reads `SCHEDULED` or `STARTED`, and a cancel is the same `400`, such as
+`from STARTED to CANCELLED`. Waiting for the sweep doesn't help. See
 [Tracking state without webhooks](/concepts/tracking-state-without-webhooks#a-session-ends).
+
+Settle a session that ended instead, with
+`POST /bookings/{bookingId}/status`:
+
+| The booking reads | Your key can set |
+| --- | --- |
+| `STARTED`, past `bookingEndUtc` | `COMPLETED`, `CLIENT_NO_SHOW` or `SUPPLIER_NO_SHOW`. |
+| `SCHEDULED`, past `bookingEndUtc` | `CLIENT_NO_SHOW` or `SUPPLIER_NO_SHOW`. To complete it, file a `SUPPLIER` attendance report instead. |
+| `AWAITING_CONFIRMATION` | `COMPLETED`, `CLIENT_NO_SHOW` or `SUPPLIER_NO_SHOW`. |
+
+A `SUPPLIER` attendance report, `POST /bookings/{bookingId}/reports`, settles
+any of the three as well. See
+[Attendance and disputes](/resources/bookings#attendance-and-disputes).
+
+If the session really didn't happen, an operator can cancel it in the
+MarketBox console. An operator's cancel of a session that has taken place
+forfeits its package session by default. The operator chooses `RETURN` to
+give it back.
 
 `409 VERSION_CONFLICT` means something else changed the booking at the same
 moment, for example the supplier's own cancel, or an order cascade. Re-read
@@ -152,11 +175,19 @@ location, and the supplier's entry in the results. See
 [Search suppliers by availability](/guides/search-suppliers-by-availability).
 </Warning>
 
-<Warning>
-**A reschedule doesn't check the booking's status either.** Read the booking
-first and move only a `SCHEDULED` one. Moving a cancelled or completed
-booking still emails everyone that it moved.
-</Warning>
+**Only a `SCHEDULED` or `STARTED` booking can move.** Changing the time or
+supplier of any other booking is refused, and nothing is written:
+
+```json
+{
+  "code": "BOOKING_NOT_AMENDABLE",
+  "message": "Booking bk_01kv60qge5eh59ap0gw0pqrrys is COMPLETED: only a scheduled or started booking can have its time, supplier or duration changed",
+  "statusCode": 422,
+  "requestId": "9e3c7a1f-5b28-4d64-8f0b-2a6d4c8e1f73"
+}
+```
+
+The booking's other fields, such as `capacity`, can still be edited.
 
 A reschedule doesn't touch the order: the price, the order item and the
 package session stay as they were.
@@ -176,6 +207,7 @@ Nothing is written when:
 | `409` | `VERSION_CONFLICT` | The booking changed at the same moment. | Re-read the booking and decide again. |
 | `400` | `BAD_REQUEST` | `bookingEndUtc must be strictly after bookingStartUtc`, an invalid `bookingTz`, or a location change the booking can't take, such as clearing an in-home `address`. | Fix the request. |
 | `404` | `NOT_FOUND` | The booking or the new supplier doesn't exist in this project. | Check the ids. |
+| `422` | `BOOKING_NOT_AMENDABLE` | The booking isn't `SCHEDULED` or `STARTED`, so its time and supplier can't change. | Don't retry. Book a new session if one is needed. |
 
 The `409` bodies carry `conflicts[]` and a `hint`. See
 [The three supplier-time conflicts](/concepts/concurrency#the-three-supplier-time-conflicts).
@@ -214,10 +246,23 @@ order. For everything else that happens to an order after it's placed, see
 | The session | Your `creditTreatment`, or the default. | Always the default: a package session goes back. |
 | Response | `200` with the booking. | `204`, no body. |
 
-Delete doesn't check the booking's status, so it can remove a session that has
-already been delivered, and return its package credit. Delete only bookings
-that shouldn't have existed. For anything that happened, or was called off,
-cancel.
+A delete is a cancel first. You can delete only a booking your key could
+cancel through `/status`. A booking that has taken place or been settled
+(`AWAITING_CONFIRMATION`, `COMPLETED`, a no-show) is refused, and nothing
+changes:
+
+```json
+{
+  "code": "BOOKING_NOT_DELETABLE",
+  "message": "Booking bk_01kv60qge5eh59ap0gw0pqrrys is AWAITING_CONFIRMATION and cannot be cancelled in this capacity now, so it cannot be deleted",
+  "statusCode": 422,
+  "requestId": "1c5e9a3d-7f42-4b08-b6d1-3e8a2c7f9d64"
+}
+```
+
+Deleting a booking that's already `CANCELLED` keeps that cancel's settlement,
+and sends no second cancellation email. Delete only bookings that shouldn't
+have existed. For anything that was called off, cancel.
 
 An order has the same pair. Delete an order only when it books nothing and
 took no money. Otherwise `DELETE /orders/{orderId}` is `409
@@ -248,7 +293,9 @@ All take the API key alone.
 | `creditTreatment` on a single session | `NO_SESSION_CREDIT` | `422` | Leave `creditTreatment` out. |
 | `creditTreatment` with a status other than `CANCELLED` | `VALIDATION_ERROR` | `400` | Send it only with `CANCELLED`. |
 | Cancelling a settled, disputed or cancelled booking | `BAD_REQUEST` | `400` | `message` names the current status. Nothing to do from the API. |
-| Cancelling a session that ended in the last hour | `BAD_REQUEST` | `400` | Wait until it reads `AWAITING_CONFIRMATION`, then cancel. |
+| Cancelling a session that has ended, whether it reads `SCHEDULED`, `STARTED` or `AWAITING_CONFIRMATION` | `BAD_REQUEST` | `400` | Settle it instead: `COMPLETED`, a no-show, or a `SUPPLIER` attendance report. An operator can still cancel it in the console. |
+| Moving the time or supplier of a booking that isn't `SCHEDULED` or `STARTED` | `BOOKING_NOT_AMENDABLE` | `422` | Don't retry. |
+| Deleting a booking that has taken place or been settled | `BOOKING_NOT_DELETABLE` | `422` | Settle it instead. |
 | The booking changed at the same moment | `VERSION_CONFLICT` | `409` | Re-read it and decide again. |
 | The new time overlaps another booking or a hold | `SLOT_BOOKED`, `SLOT_HELD` | `409` | Offer another time from search. |
 | The supplier's calendar is busy with concurrent writes | `OCCUPANCY_CONTENTION` | `409` | Retry after a short backoff. |

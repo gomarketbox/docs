@@ -274,7 +274,8 @@ cascade released its sessions:
 at once. Call it when the client abandons checkout, instead of waiting for
 the hold to lapse.
 
-It always answers `200`, with the hold's `status` after the call:
+It answers `200` with the hold's `status` after the call. All three are
+final states, not failures:
 
 | `status` | Meaning |
 | --- | --- |
@@ -285,6 +286,23 @@ It always answers `200`, with the hold's `status` after the call:
 ```json
 { "reservationId": "resv_01kv8p20m1gnqvxl92xln6awk8", "status": "RELEASED" }
 ```
+
+### Release can be refused under contention
+
+A release competes with other writes for the supplier's calendar. The API
+retries it internally. If it keeps losing, you get a `409`:
+
+```json
+{
+  "code": "OCCUPANCY_CONTENTION",
+  "message": "The supplier calendar is under contention; retry.",
+  "statusCode": 409,
+  "requestId": "4d9a2f7c-8e1b-4b63-a5d0-6c2e9f1a3b75"
+}
+```
+
+The hold is still `HELD`. Retry the release after a short, jittered pause.
+If you give up, the hold still lapses on its own at `heldUntil`.
 
 ## Refusals
 
@@ -312,7 +330,7 @@ is in [Troubleshooting](/guides/hold-slots-for-checkout#troubleshooting).
 | Convert | `422` | `PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC` | More than 15 sessions with `atomicity: "all_or_nothing"`. Use `best_effort`, or hold fewer. |
 | Convert | `422` | `BEST_EFFORT_NOT_ENABLED` | `best_effort` without the project's `suggestionConfig.allowPartialPackages`. |
 | Convert | `400` | `NOT_A_PACKAGE_SERVICE` | The `PACKAGE` item's service has no active `PACKAGE` business model. |
-| Any write | `409` | `OCCUPANCY_CONTENTION` | Heavy concurrent writes on the supplier's day. Retry after a short, jittered pause. |
+| Any write, release | `409` | `OCCUPANCY_CONTENTION` | Heavy concurrent writes on the supplier's day. Retry after a short, jittered pause. On release, the hold is still `HELD`. |
 
 A hold enforces the slate's 24-hour window when it is placed or extended, so
 its times are never older than the slate allows. Convert doesn't re-check it:

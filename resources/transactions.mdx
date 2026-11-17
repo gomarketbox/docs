@@ -39,6 +39,7 @@ that points at the one it corrects through `relatedTransactionId`.
 | `orderItemId`, `bookingId`, `allocationId` | Set on credit rows, which tie a package session to the booking that used it. |
 | `stripePaymentIntentId`, `stripeChargeId`, `stripeRefundId` | Stripe's ids, on `STRIPE` rows. |
 | `failureCode`, `failureMessage` | Why a `FAILED` row failed. |
+| `disputeId`, `disputeStatus` | A chargeback on a Stripe card `PAYMENT`: Stripe's dispute id, and where it stands (`needs_response`, `under_review`, `won` or `lost`). `null` when there is no dispute. Read-only: Stripe's webhook sets them. The row stays `SUCCEEDED` while it's disputed. |
 | `createdAt`, `updatedAt`, `createdBy`, `updatedBy` | Audit fields. |
 
 ### Kinds
@@ -94,9 +95,24 @@ When `amountPaid` plus `amountComped` covers the order's `total`, a `DRAFT` or
 To waive what an order still owes, record an `ADJUSTMENT` with `source: COMP`
 for the balance. It counts as comped, not paid.
 
-The route doesn't check the order's status. A payment on a `PAID` or
-`CANCELLED` order is recorded, and `amountPaid` rises, but the status doesn't
-change. Read the order before you take money against it.
+A `CANCELLED` order takes no new money. A `PAYMENT`, or an `ADJUSTMENT` with
+`source: COMP`, on a cancelled order is a `422 ORDER_NOT_PAYABLE`, and nothing
+is written:
+
+```json
+{
+  "code": "ORDER_NOT_PAYABLE",
+  "message": "Order ord_01kx16f2a0h8a2my9u3f4tv0sp is CANCELLED and cannot take a payment",
+  "statusCode": 422,
+  "requestId": "4a7d2c91-6e3b-4f58-b1a0-8c5e2d9f3b17"
+}
+```
+
+An `ADJUSTMENT` with `source: CASH` or `EXTERNAL` is still recorded on a
+cancelled order, because it doesn't move the balance.
+
+A `PAID` order isn't checked. A payment on it is recorded, and `amountPaid`
+rises past `total`. Read the order before you take money against it.
 
 ### A comp needs a reason
 
@@ -152,6 +168,7 @@ on another order records a new row.
 | `404` | `NOT_FOUND` | `Client not found` | The `clientId` isn't a client in this project. Leave it out to use the order's. |
 | `409` | `VERSION_CONFLICT` | `Order ord_… was modified concurrently while recording a transaction` | Nothing was recorded. Retry. With the same `idempotencyKey`, a retry can't record twice. |
 | `409` | `TRANSACTION_IDEMPOTENCY_RECORD_MISSING` | Names the key and the order. | **Terminal.** The key was used, but its row can't be read. Don't retry. Read the order's ledger and contact support with the `requestId`. |
+| `422` | `ORDER_NOT_PAYABLE` | `Order ord_… is CANCELLED and cannot take a payment` | Don't retry. A cancelled order takes no payment or comp. Sell on a new order. |
 
 ## Listing transactions
 

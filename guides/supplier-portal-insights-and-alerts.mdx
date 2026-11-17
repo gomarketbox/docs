@@ -103,6 +103,22 @@ The `kind` and `target.kind` enums also list client and staff values, which a
 supplier inbox doesn't receive. Skip any `kind` or `target` your portal doesn't
 map, rather than failing on it.
 
+For example, `PAYMENT_NEEDS_REVIEW` is a staff alert. It goes to the
+project's admins, never to a supplier inbox. It flags money Stripe has
+already moved that needs a person to look at it. Its `target` is
+`{ "kind": "order", "orderId" }`, and `payload.paymentReason` says why:
+
+| `paymentReason` | Meaning |
+| --- | --- |
+| `DISPUTE_OPENED`, `DISPUTE_WON`, `DISPUTE_LOST` | A chargeback on a card payment opened, or was decided. |
+| `PAID_ON_CANCELLED_ORDER` | A card payment succeeded after its order was cancelled. Refunding it is the business's decision. |
+| `ORDER_OVERPAID` | Settlement left `amountPaid` above the order's total. |
+| `REFUND_FAILED` | Stripe failed a card refund after reporting it succeeded, so the client didn't get the money back. |
+
+A supplier portal never receives this alert. If you validate responses
+against strict enums generated from the reference, they now include these
+values.
+
 The `payload` holds what the copy needs: `clientName` (shown as the service's
 participant settings allow, for example "Jordan L."), `serviceName`, and the
 booking's start as `startUtc` with its `zone`. Show the time in that zone. See

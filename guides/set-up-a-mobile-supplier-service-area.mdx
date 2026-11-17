@@ -177,6 +177,11 @@ A schedule may name venues in `locationRefs` as well as a zone. For a client's
 address, only the schedule's own zone counts: clinic hours never become house
 calls.
 
+If the project uses start and end of day locations, the schedule can also
+say where the supplier's day starts and ends, such as their home. The drive
+from there to the first booking, and from the last booking back, then counts.
+See [Start and end of day locations](/guides/supplier-portal-availability#start-and-end-of-day-locations).
+
 **An `ACTIVE` schedule may not overlap another `ACTIVE` schedule of the same
 supplier**, whichever venue or zone each one names. A supplier is in one
 place at a time. The second one is refused:
@@ -288,11 +293,12 @@ Two deletes cascade, or fail to, in ways that are easy to miss:
   `ACTIVE` schedule uses succeeds with `204`. The schedule keeps naming the
   deleted zone and quietly covers no one. Setting the zone's `active` to
   `false` does the same. Delete or change the schedules first.
-- **Deleting a schedule deletes its zone.** `DELETE` on a schedule whose
+- **Deleting a schedule can delete its zone.** `DELETE` on a schedule whose
   `travelZoneRef` names one of the supplier's own zones soft-deletes that zone
-  too, even when another schedule uses it. To keep the zone, change the
-  schedule's `status` to `INACTIVE` instead, or point the other schedules at
-  a new zone first.
+  too, but only when no other schedule of that supplier uses it. A paused
+  (`INACTIVE`) schedule counts as a use. So the last schedule to name a zone
+  takes the zone with it. To keep the zone, change that schedule's `status` to
+  `INACTIVE` instead of deleting it.
 
 To take time off inside an area without touching the schedule, block the time
 instead. See [Block time off](/guides/supplier-portal-availability#block-time-off).
@@ -327,6 +333,7 @@ For holidays, seasonal hours and a supplier who moves, see
 | An offering the supplier doesn't offer, or that isn't `ACTIVE` | `BAD_REQUEST` | `400` | Link the supplier to the service first. See [Provision your catalog and suppliers](/guides/provision-catalog-and-suppliers). |
 | A `TRAVEL_ZONE` booking with a project zone's `loc_` id | `NOT_FOUND` | `404` | `Booking location loc_… not found`. Use the supplier's own `stz_` zone. |
 | A `TRAVEL_ZONE` booking with another supplier's zone | `BAD_REQUEST` | `400` | `Travel zone stz_… belongs to supplier sup_…, not the booking's supplier sup_…`. Take the zone from this supplier's `locations[]`. |
+| A start or end location on a schedule, when the project has them off | `START_END_LOCATIONS_DISABLED` | `422` | Leave the fields out or send `null`. See [Start and end of day locations](/guides/supplier-portal-availability#start-and-end-of-day-locations). |
 | Search doesn't find a supplier you just set up | — | — | Wait a moment for the index, then check the zone with `GET /suppliers?lat=&lng=`. |
 
 See [Errors](/concepts/errors) for the envelope, and

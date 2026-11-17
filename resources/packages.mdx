@@ -48,23 +48,35 @@ you can take a package off sale and put it back.
 | `ACTIVE` | On sale. A new package is `ACTIVE` unless you send `status`. |
 | `ARCHIVED` | Retired. Use it to stop selling a package. |
 
-**The status is a storefront flag, not a gate.** It's what your storefront
-filters on, and `POST /availability/package-options` plans only `ACTIVE`
-packages. `POST /orders` doesn't check it: an order line for a `DRAFT` or
-`ARCHIVED` package is priced and accepted like an `ACTIVE` one. So list only
-`status=ACTIVE` packages to clients, and check a package's `status` before you
-put it on an order.
+**Only an `ACTIVE` package sells.** `POST /availability/package-options`
+plans only `ACTIVE` packages, and `POST /orders` refuses a line for a `DRAFT`
+or `ARCHIVED` one.
+
+The refusal is a `422`, and nothing is written:
+
+```json
+{
+  "code": "PACKAGE_NOT_ACTIVE",
+  "message": "Package pkg_01kv61b3x8m2q4r6t8v0w2y4z6 is ARCHIVED and cannot accept new orders",
+  "statusCode": 422,
+  "requestId": "8e4c1b7a-3f92-4d65-a0b8-5c2e9d1f7a36"
+}
+```
+
+A `PACKAGE` line is also refused with `422 NOT_SELLABLE` when the package's
+service isn't `LIVE`, or its offering isn't `ACTIVE`. List only
+`status=ACTIVE` packages of `LIVE` services to clients.
 
 Sessions a client already bought stay bookable whatever the package's status,
-because the order item captured the package when it was bought. Three other
-things do stop them being booked:
+or the service's, because the order item captured the package when it was
+bought. Three other things do stop them being booked:
 
 - The offering is deleted. Each session booking is a `404 NOT_FOUND`,
   `Offering off_… not found`.
 
-- The offering is `INACTIVE`. Each session booking is a `400 BAD_REQUEST`,
-  `Offering off_… is not bookable (status: INACTIVE)`. An order line for the
-  package is still accepted, so check the offering before you sell.
+- The offering is `INACTIVE`. Each session booking is a `422 NOT_SELLABLE`,
+  `Offering off_… is INACTIVE and is not sold; only ACTIVE offerings take new
+  bookings and orders`.
 - The service has no active `PACKAGE` business model. Each session booking is
   a `400 NOT_A_PACKAGE_SERVICE`. See
   [Changing a business model](/resources/services#changing-a-business-model).

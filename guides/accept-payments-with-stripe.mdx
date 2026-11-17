@@ -154,13 +154,25 @@ export function getStripe(): Promise<Stripe | null> {
 You charge an **order**, not individual items. Create the order (or reach an
 existing one) so it has a positive balance to collect. See
 [Orders](/resources/orders) for the full lifecycle; the amount you'll charge is
-`order.total − order.amountPaid`.
+`order.total − order.amountPaid − order.amountComped`. Treat `amountComped` as
+zero when it's absent.
 
 <Note>
 The order must be in `DRAFT` or `PENDING` status, and the balance must be
 greater than zero. Amounts are **integer minor units** (cents): `4500` means
 `$45.00`.
 </Note>
+
+An order already paid or comped in full is refused:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Nothing is owed on this order: it is already paid or comped in full",
+  "statusCode": 400,
+  "requestId": "6c2b8e14-9d3a-4f71-a5e0-2b7d9c4f1a83"
+}
+```
 
 ## Step 2 — Create the PaymentIntent from your BFF
 
@@ -206,10 +218,26 @@ A successful response carries the client secret:
 
 <Tip>
 Calling this endpoint again for the same order **reuses** the existing pending
-PaymentIntent instead of creating a second one, so it's safe to retry. Still,
-request it **once** per checkout on the client (see the ref guard below) — a
-double render or double click can otherwise create a duplicate intent.
+PaymentIntent instead of creating a second one, so it's safe to retry. An order
+has at most one open card payment. Still, request it **once** per checkout on
+the client (see the ref guard below).
 </Tip>
+
+While a card payment on the order is already moving, the call is refused. That
+happens when the intent is processing, or a saved-card charge on the order is
+in flight:
+
+```json
+{
+  "code": "PAYMENT_IN_FLIGHT",
+  "message": "A card payment on order ord_01kx16f2a0h8a2my9u3f4tv0sp is already in progress. Wait for it to finish, then read the order's transactions.",
+  "statusCode": 409,
+  "requestId": "3f8a1d6c-2b47-4e90-9c13-7a5e0b2d8f64"
+}
+```
+
+Don't start another payment. Poll the order, as in Step 4, until it's `PAID`
+or the transaction leaves `PENDING`.
 
 ## Step 3 — Collect the card with the Payment Element
 
@@ -492,10 +520,12 @@ let you re-use it.
 | Scenario | Status / signal | Resolution |
 | --- | --- | --- |
 | Business's Stripe isn't charge-ready | `409` on `payment-intent` | Finish Stripe onboarding until charges are enabled (see Prerequisites). |
-| Order has no balance, or wrong status | `400` on `payment-intent` | Charge only a `DRAFT`/`PENDING` order with `total − amountPaid > 0`. |
+| Order has no balance, or wrong status | `400` on `payment-intent` | Charge only a `DRAFT`/`PENDING` order with `total − amountPaid − amountComped > 0`. |
+| A card payment on the order is already moving | `409 PAYMENT_IN_FLIGHT` on `payment-intent` | Don't retry. Poll the order and read its transactions until the payment finishes. |
+| A card payment is disputed | `disputeStatus` set on the `PAYMENT` transaction | The row stays `SUCCEEDED`. Respond to the dispute in Stripe. See [Transactions](/resources/transactions#anatomy-of-a-transaction). |
 | Amount below Stripe's minimum | Payment fails | Ensure the charge is ≥ ~$0.50 USD equivalent; skip payment for `$0`. |
 | Card confirmed but order not `PAID` yet | Transient | Keep polling — the webhook finalizes it within seconds. |
-| Duplicate PaymentIntent | Extra pending intent | Request the intent once per checkout (ref guard). Only the confirmed intent charges; unconfirmed ones expire. |
+| Checkout requests the intent twice | Same `clientSecret` back | An order has one open intent at a time, so a repeat call reuses it. Still request it once per checkout (ref guard). |
 
 ### Security checklist
 

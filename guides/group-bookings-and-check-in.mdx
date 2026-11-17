@@ -135,9 +135,17 @@ server. Never trust one the browser sends.
 **Capacity is enforced in the same write as the registration.** Two requests
 for the last seat can't both succeed. One gets `201`. The other gets `409`.
 
-**Registration doesn't check the booking's `status`.** A cancelled or
-completed booking still accepts participants. Read the booking first, and
-register only on one that is `SCHEDULED`.
+**Only a `SCHEDULED` or `STARTED` booking takes a registration.** Any other
+status is refused, and nothing is written:
+
+```json
+{
+  "code": "BOOKING_NOT_OPEN_FOR_PARTICIPANTS",
+  "message": "Booking bk_01kx16f2a0e5x9jv6r0c1qs7pm is CANCELLED: participants can only be registered on a scheduled or started booking",
+  "statusCode": 422,
+  "requestId": "5a1d8f3c-9e27-4b64-a0c5-7f2e4b9d1c38"
+}
+```
 
 ### The booking is full
 
@@ -173,17 +181,12 @@ row is written.
 This includes the booking's own client, who is registered when the booking is
 created.
 
-<Warning>
-**A client you removed can't be registered on the same booking again.**
-Removing a participant keeps their row, marked cancelled. Registering them
-again finds that row and answers the same `409 CONFLICT`, "is already
-registered for this booking". They don't appear in the roster. Tell the client
-to book another session.
-</Warning>
+**A client you removed can be registered again.** Registering them writes a
+fresh participant row, and they're back on the roster.
 
 Both refusals share the code `CONFLICT`. Branch on the roster, not on
 `message`: if the client is in `GET /bookings/{bookingId}/participants`, it's a
-duplicate; otherwise the booking is full, or the client was removed earlier.
+duplicate; otherwise the booking is full.
 The message isn't reliable for this: the capacity check runs first, so on a
 full booking a duplicate also gets "is at capacity".
 
@@ -193,6 +196,7 @@ full booking a duplicate also gets "is at capacity".
 | --- | --- | --- |
 | `404 NOT_FOUND` | `Client not found` | The `clientId` is unknown, or belongs to another project. Nothing was written. |
 | `404 NOT_FOUND` | `Booking bk_… not found` | The booking is unknown in this project, or was deleted. |
+| `422 BOOKING_NOT_OPEN_FOR_PARTICIPANTS` | `Booking bk_… is COMPLETED: participants can only be registered on a scheduled or started booking` | The booking isn't `SCHEDULED` or `STARTED`. Nothing was written. |
 | `400 VALIDATION_ERROR` | | The body has no `clientId`. |
 
 ## Show the roster
@@ -232,17 +236,29 @@ curl -X POST "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/bookings/bk_0
 `checkInAt` set to now.
 
 - **It's safe to retry.** Checking in someone already checked in leaves them
-  checked in. Each call sets `checkInAt` to the time of that call, so a retry
-  moves it later.
+  checked in, and returns them with the first `checkInAt`. A retry doesn't
+  move it.
 - **It doesn't change the booking.** The booking's `status` stays as it is.
   Attendance for the booking as a whole is the supplier's report. See
   [Supplier day view and attendance reports](/guides/supplier-day-view-and-reporting).
 - **There's no undo.** No route sets `checkInStatus` back to `PENDING`, and
   none sets `NO_SHOW`.
-- **It doesn't check the booking's `status` either.** A participant on a
-  cancelled booking can still be checked in.
+- **It works until the booking is settled.** A `SCHEDULED`, `STARTED` or
+  `AWAITING_CONFIRMATION` booking takes a check-in, so you can finish the door
+  list after the session ends. A settled, disputed or cancelled booking
+  doesn't:
 
-A participant who isn't registered, or was removed, is a `404`:
+```json
+{
+  "code": "BOOKING_NOT_OPEN_FOR_PARTICIPANTS",
+  "message": "Booking bk_01kx16f2a0e5x9jv6r0c1qs7pm is COMPLETED: participants can only be checked in before the booking is settled or cancelled",
+  "statusCode": 422,
+  "requestId": "8d4b2a6e-3f19-4c75-b8e0-1a6c9f3d7e52"
+}
+```
+
+A participant who isn't registered, or was removed, is a `404`. So is a
+booking that doesn't exist, with "Booking bk_… not found":
 
 ```json
 {
@@ -317,10 +333,11 @@ participants are removed.
 | --- | --- | --- |
 | The booking is full | `409 CONFLICT`, "Booking bk_… is at capacity" | Tell the client it's full, or raise `capacity`. |
 | The client is already registered | `409 CONFLICT`, usually "Client cli_… is already registered for this booking" ("is at capacity" when the booking is also full) | Nothing to do: they're on the roster. |
-| The client was removed from this booking earlier | `409 CONFLICT`, as for a duplicate | They can't rejoin this booking. Offer another one. |
+| The client was removed from this booking earlier | `201` | They're registered again, with a fresh row. |
 | The client is unknown or in another project | `404 NOT_FOUND`, "Client not found" | Check the `clientId` your server resolved. |
 | The booking is unknown or deleted | `404 NOT_FOUND`, "Booking bk_… not found" | Check the `bookingId`. |
-| The booking is cancelled or completed | `201` | Registration doesn't check `status`. Check it before you register. |
+| Registering on a booking that isn't `SCHEDULED` or `STARTED` | `422 BOOKING_NOT_OPEN_FOR_PARTICIPANTS` | Don't retry. Offer another session. |
+| Checking in on a settled, disputed or cancelled booking | `422 BOOKING_NOT_OPEN_FOR_PARTICIPANTS` | Don't retry. Attendance there is already decided. |
 | Check-in or removal of a participant who isn't on the booking | `404 NOT_FOUND`, "Participant cli_… not found on this booking" | Re-read the roster. |
 | Roster of an unknown booking | `200`, `data: []` | Read the booking to confirm it exists. |
 

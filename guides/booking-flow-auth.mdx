@@ -238,6 +238,10 @@ project — an `ACTIVE` project membership with the `CLIENT` role and a client
 profile, plus a Stripe Connect `stripeCustomerId` on that profile when the
 project has payments configured.
 
+A person who is already a member of the project, such as an admin or a
+supplier, and signs in on your booking site becomes a client too. Onboarding
+adds `CLIENT` to their roles and keeps the others.
+
 Every other `/clients/me` route requires that `ACTIVE` membership. See
 [Who may call an end-user route](/concepts/end-user-authentication#who-may-call-an-end-user-route).
 

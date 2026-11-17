@@ -419,6 +419,10 @@ Only **live** schedules are returned — `ACTIVE`, not deleted, and `endDate` no
 yet passed in the schedule's own `timezone`. `schedules: []` means the supplier
 cannot currently be booked at all, whatever `active` says.
 
+A schedule's start and end of day locations are never returned here, or in
+any availability response. In the public API, you read and write them on the
+[supplier plane](/guides/supplier-portal-availability#start-and-end-of-day-locations).
+
 ## Listing suppliers
 
 ```
@@ -532,6 +536,27 @@ row is not written.
 `email` is unique within the project. A `POST` or `PUT` that uses another
 supplier's email is `409 CONFLICT`, "A supplier with this email already exists
 in the project", and nothing is written.
+
+A `PUT` that sends `active` is also `409 CONFLICT` when `active` changed
+between the update's read and its write: "This supplier's Active setting
+changed while it was being saved. Reload and try again." Read the supplier
+again, then retry if your change still applies.
+
+The avatar routes answer the same way. A `PUT` or `DELETE` on
+`/suppliers/{supplierId}/avatar` is `409 CONFLICT` when another confirm or
+remove changed the photo while this one was being saved:
+
+```json
+{
+  "code": "CONFLICT",
+  "message": "This supplier's photo changed while it was being saved. Reload and try again.",
+  "statusCode": 409,
+  "requestId": "5b8e2d1f-7c4a-4e36-9a0b-2f6d8c1e3a57"
+}
+```
+
+Read the supplier again, then retry if the photo still isn't the one you
+want.
 
 A `DELETE` is permanent around the edges, even though the profile itself is
 only soft-deleted and stays readable to the bookings that reference it:

@@ -54,7 +54,8 @@ Before that, the person has no membership of the project, and each returns
 
 A `404 NOT_FOUND`, `No client profile for this project`, comes back only for
 someone who is a member of the project, such as staff, but has no client
-profile there.
+profile there. Call `POST /clients/me` for them: it adds the `CLIENT` role to
+their membership, keeps their other roles, and creates the profile.
 
 ## Show the profile
 
