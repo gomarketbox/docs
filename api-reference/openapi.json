@@ -14861,7 +14861,7 @@
             }
           },
           "422": {
-            "description": "The booking location is a PHYSICAL Location without coordinates (UNPROCESSABLE_ENTITY): the business’s location data needs fixing; or a line names a service that is not LIVE or was deleted, or an offering that is not ACTIVE (NOT_SELLABLE)",
+            "description": "The booking location is a PHYSICAL Location without coordinates (UNPROCESSABLE_ENTITY): the business’s location data needs fixing; or a line names an offering that is not ACTIVE (NOT_SELLABLE): the line draws down an order item already bought, so only the offering is checked, and a service retired since stays bookable",
             "content": {
               "application/json": {
                 "schema": {
@@ -24346,7 +24346,7 @@
             }
           },
           "422": {
-            "description": "Slate too large, best-effort not enabled, or a PHYSICAL location without coordinates (UNPROCESSABLE_ENTITY)",
+            "description": "Slate too large, best-effort not enabled, a PHYSICAL location without coordinates (UNPROCESSABLE_ENTITY), or the credit’s offering is no longer ACTIVE (NOT_SELLABLE): a service retired since does not refuse credits already bought",
             "content": {
               "application/json": {
                 "schema": {
@@ -41755,7 +41755,7 @@
             }
           },
           "422": {
-            "description": "The hold has more intervals than an all_or_nothing booking can write at once (PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC), best_effort is not enabled for this project (BEST_EFFORT_NOT_ENABLED), the held location is a PHYSICAL Location without coordinates (UNPROCESSABLE_ENTITY), or the order item names a service that is not LIVE or was deleted, or an offering that is not ACTIVE (NOT_SELLABLE)",
+            "description": "The hold has more intervals than an all_or_nothing booking can write at once (PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC), best_effort is not enabled for this project (BEST_EFFORT_NOT_ENABLED), the held location is a PHYSICAL Location without coordinates (UNPROCESSABLE_ENTITY), or the order item names an offering that is not ACTIVE (NOT_SELLABLE): the hold draws down an order item already bought, so only the offering is checked, and a service retired since stays bookable",
             "content": {
               "application/json": {
                 "schema": {
@@ -45804,7 +45804,7 @@
             }
           },
           "422": {
-            "description": "Slate too large, best-effort not enabled, or a PHYSICAL location without coordinates (UNPROCESSABLE_ENTITY)",
+            "description": "Slate too large, best-effort not enabled, a PHYSICAL location without coordinates (UNPROCESSABLE_ENTITY), or the credit’s offering is no longer ACTIVE (NOT_SELLABLE): a service retired since does not refuse credits already bought",
             "content": {
               "application/json": {
                 "schema": {
@@ -52853,7 +52853,8 @@
                         },
                         "disputeId": {
                           "type": "string",
-                          "nullable": true
+                          "nullable": true,
+                          "description": "The Stripe dispute (chargeback) id, when the client disputed this card payment with their bank. Set by MarketBox from Stripe's events, never by a request. The transaction's `status` stays SUCCEEDED while it is disputed."
                         },
                         "disputeStatus": {
                           "type": "string",
@@ -52864,7 +52865,8 @@
                             "won",
                             "lost",
                             null
-                          ]
+                          ],
+                          "description": "Where the dispute stands: `needs_response` (evidence is due in Stripe), `under_review` (the bank is deciding), `won` (the money stays), or `lost` (the money was taken back). Null or absent when the payment was never disputed. An inquiry that closes without a chargeback reads `won`. Respond to a dispute in Stripe: the API cannot."
                         },
                         "channel": {
                           "type": "string",
@@ -53044,7 +53046,8 @@
                         },
                         "disputeId": {
                           "type": "string",
-                          "nullable": true
+                          "nullable": true,
+                          "description": "The Stripe dispute (chargeback) id, when the client disputed this card payment with their bank. Set by MarketBox from Stripe's events, never by a request. The transaction's `status` stays SUCCEEDED while it is disputed."
                         },
                         "disputeStatus": {
                           "type": "string",
@@ -53055,7 +53058,8 @@
                             "won",
                             "lost",
                             null
-                          ]
+                          ],
+                          "description": "Where the dispute stands: `needs_response` (evidence is due in Stripe), `under_review` (the bank is deciding), `won` (the money stays), or `lost` (the money was taken back). Null or absent when the payment was never disputed. An inquiry that closes without a chargeback reads `won`. Respond to a dispute in Stripe: the API cannot."
                         },
                         "channel": {
                           "type": "string",
@@ -53143,6 +53147,16 @@
           },
           "409": {
             "description": "Order modified concurrently (VERSION_CONFLICT), or a replay whose original row could not be read (TRANSACTION_IDEMPOTENCY_RECORD_MISSING — terminal, do not retry)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorMessage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A SUCCEEDED PAYMENT, or an ADJUSTMENT with source COMP, on a CANCELLED order (ORDER_NOT_PAYABLE). A REFUND, or any other ADJUSTMENT, is still recorded",
             "content": {
               "application/json": {
                 "schema": {
@@ -53364,7 +53378,8 @@
                           },
                           "disputeId": {
                             "type": "string",
-                            "nullable": true
+                            "nullable": true,
+                            "description": "The Stripe dispute (chargeback) id, when the client disputed this card payment with their bank. Set by MarketBox from Stripe's events, never by a request. The transaction's `status` stays SUCCEEDED while it is disputed."
                           },
                           "disputeStatus": {
                             "type": "string",
@@ -53375,7 +53390,8 @@
                               "won",
                               "lost",
                               null
-                            ]
+                            ],
+                            "description": "Where the dispute stands: `needs_response` (evidence is due in Stripe), `under_review` (the bank is deciding), `won` (the money stays), or `lost` (the money was taken back). Null or absent when the payment was never disputed. An inquiry that closes without a chargeback reads `won`. Respond to a dispute in Stripe: the API cannot."
                           },
                           "channel": {
                             "type": "string",
@@ -53459,7 +53475,7 @@
       "post": {
         "tags": ["Transactions"],
         "summary": "Create a Stripe PaymentIntent for an order (client-side confirmation)",
-        "description": "Starts a card payment for whatever the order still owes. Returns a `clientSecret` to confirm with Stripe.js in the browser — the card details never reach this API. The charge is created on the project's connected account for `total - amountPaid - amountComped`, so part-paid orders are billed only for the remainder and an order paid or comped in full is a 400.\n\nSafe to call more than once: if an open PENDING intent already exists for the order, its existing `clientSecret` is returned instead of a second intent being created, so a user who reloads checkout is not charged twice. Reuse means the amount comes from the original intent, though — if the order total changed in between, cancel the outstanding intent rather than expecting a fresh figure here.\n\nThe order must be DRAFT or PENDING; anything further along its lifecycle is a 400. A 409 means the project has no Stripe account connected or is not yet cleared to take charges, which is a setup problem no retry will fix. Confirming the intent does NOT settle the transaction here: the row stays PENDING until Stripe's webhook confirms it, so treat payment as complete only once the transaction reads SUCCEEDED.\n\nWhen the order's client has an email on file, the card is saved to that client for future bookings (the intent is created with `setup_future_usage: off_session`), so tell the client at checkout that their card will be saved. An intent reused from an earlier call is updated to save the card as well, provided the payment has not been confirmed yet.",
+        "description": "Starts a card payment for whatever the order still owes. Returns a `clientSecret` to confirm with Stripe.js in the browser — the card details never reach this API. The charge is created on the project's connected account for `total - amountPaid - amountComped`, so part-paid orders are billed only for the remainder and an order paid or comped in full is a 400.\n\nSafe to call more than once: an order has at most one open card payment. If its open intent can still be paid and is for the amount owed now, its existing `clientSecret` is returned instead of a second intent being created, so a user who reloads checkout is not charged twice. If the amount owed has changed since, the old intent is canceled and a new one is created for the new amount. While a card payment on the order is already moving (processing, or a saved-card charge in flight), the call is a 409 `PAYMENT_IN_FLIGHT`: wait for it to finish, then read the order's transactions.\n\nThe order must be DRAFT or PENDING; anything further along its lifecycle is a 400. A 409 means the project has no Stripe account connected or is not yet cleared to take charges, which is a setup problem no retry will fix. Confirming the intent does NOT settle the transaction here: the row stays PENDING until Stripe's webhook confirms it, so treat payment as complete only once the transaction reads SUCCEEDED.\n\nWhen the order's client has an email on file, the card is saved to that client for future bookings (the intent is created with `setup_future_usage: off_session`), so tell the client at checkout that their card will be saved. An intent reused from an earlier call is updated to save the card as well, provided the payment has not been confirmed yet.",
         "parameters": [
           {
             "schema": {
@@ -53547,7 +53563,7 @@
             }
           },
           "409": {
-            "description": "Project not charge-ready",
+            "description": "Project not charge-ready, or a card payment on the order is already in progress (PAYMENT_IN_FLIGHT): wait for it to finish, then read the order’s transactions",
             "content": {
               "application/json": {
                 "schema": {

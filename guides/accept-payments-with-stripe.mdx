@@ -219,8 +219,12 @@ A successful response carries the client secret:
 <Tip>
 Calling this endpoint again for the same order **reuses** the existing pending
 PaymentIntent instead of creating a second one, so it's safe to retry. An order
-has at most one open card payment. Still, request it **once** per checkout on
-the client (see the ref guard below).
+has at most one open card payment. The intent is reused only while it is for
+the amount owed now. If the amount owed has changed, for example after you add
+an item, the old intent is canceled and you get a new `clientSecret` for the
+new amount. Mount the Payment Element with the `clientSecret` from the latest
+call. Still, request it **once** per checkout on the client (see the ref guard
+below).
 </Tip>
 
 While a card payment on the order is already moving, the call is refused. That
