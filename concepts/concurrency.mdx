@@ -124,7 +124,8 @@ writers hammering the same supplier-day serialize. The API retries
 internally; `OCCUPANCY_CONTENTION` means even the bounded retry gave up.
 
 This one **is** retryable. Re-send the same request after a short backoff
-(50–200 ms, jittered). Two people booking *different* times with the same
+(50–200 ms, jittered). On a hold release, the hold is still `HELD` after this
+`409`, so retry the release. Two people booking *different* times with the same
 supplier on the same day normally both succeed — you should see this code
 only under genuinely heavy contention.
 
@@ -191,6 +192,7 @@ has booked returns `SLOT_HELD` / `SLOT_BOOKED`, not `VERSION_CONFLICT`.
 | `POST /v1/projects/{projectId}/orders/{orderId}/package-bookings` | Yes — same three, plus stale-slot and credit conflicts. |
 | `POST /v1/projects/{projectId}/holds` | Yes — `SLOT_BOOKED` / `SLOT_HELD` when the time is already claimed by someone else, or `RESERVATION_NOT_FOUND` / `RESERVATION_NOT_HELD` / `RESERVATION_FORBIDDEN` when extending a hold with a `reservationId` that is unknown, no longer held, or not yours. |
 | `POST /v1/projects/{projectId}/holds/{reservationId}/convert` | Yes — `HOLD_EXPIRED`, `SLOT_BOOKED` / `SLOT_HELD` if the time went while you were paying, or `OCCUPANCY_CONTENTION`. |
+| `POST /v1/projects/{projectId}/holds/{reservationId}/release` | Yes — `OCCUPANCY_CONTENTION` only. The hold is still `HELD`, so retry the release. |
 | `PATCH /v1/projects/{projectId}/bookings/{bookingId}` | Yes — `VERSION_CONFLICT`, `SLOT_BOOKED` / `SLOT_HELD` on a reschedule (with `conflicts[]` and `hint`), or `OCCUPANCY_CONTENTION`. |
 | `PATCH /v1/projects/{projectId}/suppliers/me/bookings/{bookingId}` | Yes — `VERSION_CONFLICT`, `SLOT_UNAVAILABLE`, `OCCUPANCY_CONTENTION`, and the notice-window and status refusals. |
 | `PATCH` and `DELETE` on `.../suppliers/me/schedules/{scheduleId}`, `/blocked-times/{blockedTimeId}` and `/travel-zones/{travelZoneId}` | Yes — `VERSION_CONFLICT` for a stale `version`, or another write during a `DELETE`. A schedule overlap is `CONFLICT`. |
@@ -200,6 +202,8 @@ has booked returns `SLOT_HELD` / `SLOT_BOOKED`, not `VERSION_CONFLICT`.
 | `POST /v1/projects/{projectId}/orders/{orderId}/status` | Yes — order version moved. |
 | `DELETE /v1/projects/{projectId}/orders/{orderId}` | Yes — order version moved, or `ORDER_NOT_DELETABLE` when the order holds a booking or money. |
 | `POST /v1/projects/{projectId}/bookings/{bookingId}/participants` | Yes — `CONFLICT` (booking at capacity, or the client is already registered). |
+| `PUT /v1/projects/{projectId}/suppliers/{supplierId}` | Yes — `CONFLICT` for a duplicate email, or when you sent `active` and it changed between the update's read and its write. Read the supplier again and retry. |
+| `PUT` and `DELETE` on `.../suppliers/{supplierId}/avatar` and `.../suppliers/me/avatar` | Yes — `CONFLICT` when another confirm or remove changed the photo while this one was being saved. Read the supplier again and retry. |
 
 ## Capacity and duplicate conflicts
 
@@ -224,5 +228,6 @@ proceed. Surface them to the user rather than looping.
 | `SLOT_BOOKED` | **No** — the time is taken. Search again. |
 | `HOLD_EXPIRED` | **No** — hold again, then convert the new reservation. |
 | `CONFLICT` (booking at capacity, duplicate participant, or overlapping schedule) | **No** — surface to the user. |
+| `CONFLICT` (a supplier's `active` or photo changed during your write) | Re-read the supplier first, then retry. |
 
 See [Errors](/concepts/errors) for the full envelope and code list.

@@ -3,6 +3,57 @@ title: "Changelog"
 description: "New features, updates, and fixes to the MarketBox API."
 ---
 
+<Update label="November 17, 2026" tags={["API"]}>
+
+## Stricter booking and order rules, traffic-aware offered times, a buffer before each service, and schedule start and end locations
+
+This release makes the open API enforce the booking, order and payment rules the dashboard already applied. Offered times now account for split shifts, traffic and the drive to neighbouring bookings. Services gain an optional buffer before they start. Supplier schedules can name where the day starts and ends, once a project turns that on.
+
+**Several requests that used to succeed are now refused with a 4xx code.** No field was removed or renamed, and every new field is optional or nullable. Regenerate decoders for services, transactions, supplier alerts and supplier-plane schedules. Branch on the new codes rather than retrying them.
+
+**Breaking**
+
+- **A service that isn't `LIVE`, or an offering that isn't `ACTIVE`, is no longer sold.** `POST …/orders` and `POST …/orders/{orderId}/items` answer `422 NOT_SELLABLE`, for example "Service srv_… is DRAFT and is not sold; only LIVE services take new bookings and orders". A service that wasn't `LIVE` used to be accepted. An inactive offering on an order item used to be `400`. Bookings, hold conversion and package sessions against an order item already bought stay bookable after the service stops being `LIVE`, but answer `422 NOT_SELLABLE` once the offering isn't `ACTIVE`.
+- **A `PACKAGE` line for a `DRAFT` or `ARCHIVED` package** on `POST …/orders` is `422 PACKAGE_NOT_ACTIVE`.
+- **Your key can't cancel a booking that has taken place.** `POST …/bookings/{bookingId}/status` with `CANCELLED` on an `AWAITING_CONFIRMATION` booking is `400`. Settle it instead, with `COMPLETED` or a no-show.
+- **`DELETE …/bookings/{bookingId}` is a cancel first.** A booking your key can't cancel (`AWAITING_CONFIRMATION`, `COMPLETED`, a no-show) is `422 BOOKING_NOT_DELETABLE`, and nothing changes. Deleting a booking that is already cancelled sends no second cancellation email.
+- **Moving a settled booking is refused.** A `PATCH …/bookings/{bookingId}` that changes the time or supplier of a booking that isn't `SCHEDULED` or `STARTED` is `422 BOOKING_NOT_AMENDABLE`. Its other fields can still be edited.
+- **An attendance report filed with your key now settles the booking.** A `SUPPLIER` report on `POST …/bookings/{bookingId}/reports` moves the booking as the supplier's own report does: attended → `COMPLETED` (or `DISPUTED` when the client reported not attending), did not attend → `SUPPLIER_NO_SHOW`. A `CLIENT` "did not attend" on a completed booking inside the dispute window opens a dispute. A report before the session ends, on a cancelled booking, or a `SUPPLIER` report on a settled booking is `422 BOOKING_NOT_REPORTABLE`. It was `422 UNPROCESSABLE_ENTITY`, and a report never changed the status.
+- **Participants only join an open booking.** Registering a participant on a booking that isn't `SCHEDULED` or `STARTED`, or checking one in on a booking that is settled, disputed or cancelled, is `422 BOOKING_NOT_OPEN_FOR_PARTICIPANTS`. An `AWAITING_CONFIRMATION` booking still takes a check-in.
+- **A cancelled order takes no new money.** A `PAYMENT` or `COMP` recorded on a `CANCELLED` order is `422 ORDER_NOT_PAYABLE`, "Order ord_… is CANCELLED and cannot take a payment". A `REFUND` is still recorded.
+- **One card payment at a time.** `POST …/orders/{orderId}/payment-intent` while a card payment on the order is in progress is `409 PAYMENT_IN_FLIGHT`.
+- **The status routes check the id.** `POST …/offerings/{offeringId}/status` with an unknown or deleted offering is `404 NOT_FOUND`, "Offering not found". It used to write a stub. `POST …/business-models/{businessModelId}/status` with an unknown id is `404`, "Business model not found".
+
+**New**
+
+- **`bufferBeforeStartMinutes` on services** — 0 to 120, default 0, on service responses and on `POST …/services` and `PUT …/services/{serviceId}`. Suggested times leave that gap before a job of the service, online jobs included. It is never busy time, never part of `travelTimeMins`, and never refuses a booking made at a specific time.
+- **Start and end locations on supplier-plane schedules** — `startLocation`, `endLocation`, `driveTiming`, `maxTravelOnStartDrive` and `maxTravelOnEndDrive` on `…/suppliers/me/schedules`. All are nullable, and `null` uses the project's default. A write is `422 START_END_LOCATIONS_DISABLED` while the project has the feature off, and `422 SETTING_NOT_DELEGATED` for a setting the project keeps. Sending `null` or the stored value is never refused. The feature is off for every project until it is turned on.
+- **`disputeId` and `disputeStatus` on transactions** — set when a card payment is disputed. Read-only.
+- **`PAYMENT_NEEDS_REVIEW` in the alert `kind` enum** — with `payload.paymentReason`. It is a staff alert, so `GET …/suppliers/me/alerts` doesn't return it to a supplier. Typed clients should still accept the value. See [Supplier portal: insights and alerts](/guides/supplier-portal-insights-and-alerts#alerts).
+
+**Changed**
+
+- **Offered times.** Each block of a split shift offers its own first and last time. Open slots leave time to drive to and from neighbouring bookings. Drive times account for traffic at the time of day, so rush-hour times can move later or disappear, and `travelTimeMins` reports the drive with traffic. A supplier whose bookings can't be routed shows up in `errors[]` instead of failing the whole search.
+- **`POST …/availability/time-slots`** — `metrics.totalTravelTimeRequestsMade` counts distinct drives across the whole request. A recurring window in a time zone ahead of UTC lands on the right weekdays.
+- **`POST …/orders/{orderId}/payment-intent` bills `total − amountPaid − amountComped`.** An order paid or comped in full is `400`.
+- **A delivered package session cancelled without a `creditTreatment` is `FORFEIT`.** A session still to come is still `RETURN`.
+- **`POST …/holds/{reservationId}/release` can answer `409 OCCUPANCY_CONTENTION`.** The hold is still `HELD`. Retry the release.
+- **Supplier photo and `active` writes can answer `409 CONFLICT`** when another request changed the same record meanwhile. Read the supplier again and retry.
+- **`POST …/clients/me` makes an existing member a client.** An admin or supplier who signs in on your booking site gains the `CLIENT` role.
+- **Deleting a supplier-plane schedule keeps a travel zone another schedule uses.**
+- **`GET …/orders` with `paymentMethod` keeps settled orders that were later cancelled,** with their `status`.
+
+**What this means for you**
+
+- **Handle the new codes without retrying.** `NOT_SELLABLE`, `PACKAGE_NOT_ACTIVE`, `BOOKING_NOT_DELETABLE`, `BOOKING_NOT_AMENDABLE`, `BOOKING_NOT_REPORTABLE`, `BOOKING_NOT_OPEN_FOR_PARTICIPANTS` and `ORDER_NOT_PAYABLE` won't succeed on retry.
+- **Settle sessions that took place instead of cancelling them.**
+- **Expect offered times to change** at rush hour and around split shifts. Don't cache drive times across times of day.
+- **Accept the new optional fields** on services, transactions, alerts and schedules.
+
+Full detail: [Errors → Common error codes](/concepts/errors#common-error-codes), [Bookings](/resources/bookings), [Cancel or reschedule a booking](/guides/cancel-or-reschedule-a-booking), [Orders](/resources/orders), [Services](/resources/services), [Availability](/resources/availability), [Supplier portal: availability](/guides/supplier-portal-availability).
+
+</Update>
+
 <Update label="November 5, 2026" tags={["API"]}>
 
 ## Supplier access checks and refusal codes, expired slates can't be held, client disputes, and 4xx instead of 500s

@@ -40,7 +40,7 @@ specific to suppliers, start with
 | [Sign-in and access](/guides/supplier-portal-sign-in-and-access) | What you need first, the two credentials, checking access on sign-in, every refusal, removed versus never-invited suppliers, and the links in MarketBox emails. |
 | [Profile and photo](/guides/supplier-portal-profile-and-photo) | Reading and editing the profile, picking services and skills, and changing the photo. |
 | [Bookings](/guides/supplier-portal-bookings) | The day's agenda, attendance reports, rating the client, and cancelling or moving a booking. |
-| [Availability](/guides/supplier-portal-availability) | Working hours, blocked time, `exdates`, travel zones and venues: the field rules for each. |
+| [Availability](/guides/supplier-portal-availability) | Working hours, blocked time, `exdates`, start and end of day locations, travel zones and venues: the field rules for each. |
 | [Insights and alerts](/guides/supplier-portal-insights-and-alerts) | Demand and search insights, and the alerts bell. |
 
 Three task guides go deeper on the same plane:
@@ -101,6 +101,9 @@ For a venue, pick one from `GET /suppliers/me/locations`. See
 `travelZoneRef` or the venue in `locationRefs`. **A travel zone on its own
 makes no one bookable.** See
 [Set working hours](/guides/supplier-portal-availability#set-working-hours).
+If the project uses start and end of day locations, the schedule can also
+carry where the supplier's day starts and ends. See
+[Start and end of day locations](/guides/supplier-portal-availability#start-and-end-of-day-locations).
 </Step>
 
 <Step title="Check what clients are offered">

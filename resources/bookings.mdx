@@ -46,10 +46,10 @@ window has passed. See [Attendance and disputes](#attendance-and-disputes).
 | `STARTED` | The session is under way. | Your key, once `bookingStartUtc` has passed. The supplier plane has no route that sets it. |
 | `AWAITING_CONFIRMATION` | The session has ended and the booking is waiting to be settled. It stays here until the supplier reports attendance, or your key or an operator sets an outcome. | The platform, in an hourly sweep after `bookingEndUtc` passes, so up to about an hour later. See [Tracking state without webhooks](/concepts/tracking-state-without-webhooks#a-session-ends). An operator can also reverse a settled booking back here within a window. |
 | `DISPUTED` | The client reported that they didn't attend, and the booking was otherwise going to be (or had just been) `COMPLETED`. | The platform, when an attendance report is filed. See [Attendance and disputes](#attendance-and-disputes). Resolved by an operator in the MarketBox console. |
-| `COMPLETED` | Delivered. | The supplier's own report that they attended, or your key. Nothing completes a booking automatically. A client can still dispute it for 24 hours. |
+| `COMPLETED` | Delivered. | A `SUPPLIER` attendance report that says they attended, filed by the supplier or by your key, or a status change by your key. Nothing completes a booking automatically. A client can still dispute it for 24 hours. |
 | `CLIENT_NO_SHOW` | The client did not attend. | Your key, after a grace period past the start. No attendance report sets it: a report says only whether its own side attended. |
-| `SUPPLIER_NO_SHOW` | The supplier did not attend. | The supplier's own report that they did not attend, or your key after the same grace period. |
-| `CANCELLED` | Called off. **Hard-terminal**: money may have moved, so nothing leaves this state. | The supplier, through the [supplier plane](/guides/build-a-supplier-portal), only while the booking is `SCHEDULED` and before `bookingEndUtc`. Your key, also from `STARTED` (before `bookingEndUtc`) and from `AWAITING_CONFIRMATION`. An operator, also from `DISPUTED`. |
+| `SUPPLIER_NO_SHOW` | The supplier did not attend. | A `SUPPLIER` attendance report that says they did not attend, filed by the supplier or by your key, or a status change by your key after the same grace period. |
+| `CANCELLED` | Called off. **Hard-terminal**: money may have moved, so nothing leaves this state. | The supplier, through the [supplier plane](/guides/build-a-supplier-portal), only while the booking is `SCHEDULED` and before `bookingEndUtc`. Your key, also from `STARTED`, but only before `bookingEndUtc`. An operator, also from `AWAITING_CONFIRMATION` and `DISPUTED`. Your key can't cancel a session that has taken place: settle it instead. |
 | `NO_SHOW` | **Legacy, read-only.** The pre-split no-show, which does not say which side was absent. Nothing transitions out of it. | Nothing, any more. Bookings recorded before the split keep it indefinitely. |
 
 You move a booking with
@@ -61,10 +61,10 @@ your key cannot: sending it is always a `400`.
 
 The supplier's own attendance report is filed through the
 [supplier plane](/guides/supplier-portal-bookings#bookings-and-the-attendance-report).
-A report you file with your key, through
-`POST /v1/projects/{projectId}/bookings/{bookingId}/reports`, is recorded, but
-filing it doesn't change the booking's status. A `CLIENT` report saying the
-client didn't attend still counts later: see
+You can also file a report with your key, through
+`POST /v1/projects/{projectId}/bookings/{bookingId}/reports`. It does exactly
+what the same answer does in the MarketBox dashboard. A `SUPPLIER` report
+settles the booking, and a `CLIENT` report can open a dispute. See
 [Attendance and disputes](#attendance-and-disputes).
 
 <Note>
@@ -73,14 +73,28 @@ client didn't attend still counts later: see
   what happened: it cannot resolve a `DISPUTED` booking, and it cannot
   reverse a settled booking (`COMPLETED`, `CLIENT_NO_SHOW`,
   `SUPPLIER_NO_SHOW`) back to `AWAITING_CONFIRMATION`. Both are reserved for
-  the MarketBox console. Which transitions are open also depends on the
+  the MarketBox console. It also cannot cancel an `AWAITING_CONFIRMATION`
+  booking. The session has taken place, and cancelling it would void the
+  supplier's claim to be paid. Settle it instead, with `COMPLETED` or a
+  no-show. Which transitions are open also depends on the
   clock — a booking cannot be started before `bookingStartUtc`, or marked a
   no-show until a grace period after it.
 </Note>
 
 A transition the booking cannot make from where it stands is a
 `400 BAD_REQUEST` whose `message` names the booking's **current** status, so a
-rejection tells you what to retry from. `409 VERSION_CONFLICT` means the
+rejection tells you what to retry from:
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "Cannot transition booking status from AWAITING_CONFIRMATION to CANCELLED",
+  "statusCode": 400,
+  "requestId": "8c2f5a1e-4d7b-4e93-a6c0-1b9e3f7d2a58"
+}
+```
+
+`409 VERSION_CONFLICT` means the
 booking changed underneath you — re-read it and decide again. See
 [Errors](/concepts/errors).
 
@@ -103,11 +117,31 @@ report is filed. No job settles bookings later.
 | Nobody reports | Stays `AWAITING_CONFIRMATION` |
 
 The 24 hours run from the instant the booking became `COMPLETED`, which is its
-`statusUpdatedAt` while it is `COMPLETED`. A client report you file with your
-key counts toward the second row. It doesn't open a dispute on a `COMPLETED`
-booking: that comes from the client's own report in MarketBox, such as the
-review page MarketBox emails them. An operator resolves a `DISPUTED` booking
-in the MarketBox console. Your key can't.
+`statusUpdatedAt` while it is `COMPLETED`. An operator resolves a `DISPUTED`
+booking in the MarketBox console. Your key can't.
+
+A report you file with your key follows the same table. It's a report from
+the side named in `reporterRole`, exactly as if that side had filed it in
+MarketBox. You can file one only once the session has ended. Otherwise you get
+`422 BOOKING_NOT_REPORTABLE`, and nothing is written:
+
+| When | `message` |
+| --- | --- |
+| The session hasn't ended | "This booking cannot be reported on until its session has ended" |
+| The booking is `CANCELLED` | "A cancelled booking cannot be reported on" |
+| A `SUPPLIER` report on a booking that's already settled | "This booking is already settled, so a supplier report can no longer change it" |
+
+```json
+{
+  "code": "BOOKING_NOT_REPORTABLE",
+  "message": "This booking cannot be reported on until its session has ended",
+  "statusCode": 422,
+  "requestId": "4a9d2e7c-1f36-4b85-9e0a-7c3b5d1f8e26"
+}
+```
+
+A `CLIENT` report on a settled booking is recorded. It changes nothing unless
+it opens a dispute.
 
 To let suppliers file their report from your own portal, see
 [Supplier day view and attendance reports](/guides/supplier-day-view-and-reporting#after-the-booking-ends).
@@ -130,7 +164,8 @@ What happens to the session depends on the order item:
 
 | Booking drew on | Default outcome | `creditTreatment` |
 | --- | --- | --- |
-| A `PACKAGE` order item | The session goes back to the order item: `quantityRemaining` rises and a `CREDIT_REVERSAL` transaction offsets the original `CREDIT_REDEMPTION`. | Send `"FORFEIT"` to keep the session spent, for example for a late cancellation. `"RETURN"` states the default explicitly. |
+| A `PACKAGE` order item, session still to come (`SCHEDULED`, `STARTED`) | `RETURN`. The session goes back to the order item: `quantityRemaining` rises and a `CREDIT_REVERSAL` transaction offsets the original `CREDIT_REDEMPTION`. | Send `"FORFEIT"` to keep the session spent, for example for a late cancellation. `"RETURN"` states the default explicitly. |
+| A `PACKAGE` order item, session already taken place (`AWAITING_CONFIRMATION`, `DISPUTED`) | `FORFEIT`. The session stays spent. | Only an operator can cancel these, so this default applies to cancels made in the MarketBox console. Your key gets a `400`. |
 | A `SINGLE_SESSION` order item | The allocation is closed. No quantity comes back, because a single session holds no reusable credit. | Don't send it. It is a `422 NO_SESSION_CREDIT`, and nothing is cancelled. |
 
 ```json
@@ -190,10 +225,25 @@ bookings disappear from list endpoints but their data is retained for
 audit purposes. Reserve delete for bookings created in error; cancel a booking
 that was genuinely called off.
 
-A delete settles the booking exactly like a default cancel: it releases the
-supplier's time, returns a package session to its order item, and closes a
-single-session allocation. Deleting a booking that is already `CANCELLED`
-leaves that cancel's settlement as it stands.
+A delete is a cancel first. It settles the booking exactly like a default
+cancel: it releases the supplier's time, returns a package session to its
+order item, and closes a single-session allocation.
+
+You can delete only a booking your key could cancel through `/status`. A
+booking that has taken place or been settled (`AWAITING_CONFIRMATION`,
+`COMPLETED`, a no-show) is refused, and nothing changes:
+
+```json
+{
+  "code": "BOOKING_NOT_DELETABLE",
+  "message": "Booking bk_01kv60qge5eh59ap0gw0pqrrys is COMPLETED and cannot be cancelled in this capacity now, so it cannot be deleted",
+  "statusCode": 422,
+  "requestId": "6f1b8d3a-2c94-4e57-b0a6-9d4e2f7c1b35"
+}
+```
+
+Deleting a booking that is already `CANCELLED` leaves that cancel's settlement
+as it stands. It sends no second cancellation email.
 
 ## Anatomy
 
@@ -265,7 +315,9 @@ The server validates:
 
 - `bookingEndUtc > bookingStartUtc`.
 - Every referenced offering exists (otherwise `404`) and is `ACTIVE`
-  (otherwise `400`).
+  (otherwise `422 NOT_SELLABLE`). The service's own status isn't re-checked:
+  each line draws on an order item already bought, so it stays bookable when
+  its service stops being `LIVE`.
 - All service lines share a single currency (otherwise 400).
 - `bookingTz` is a valid IANA identifier.
 - `clientId` and `supplierId` belong to this project. An id from another
@@ -319,6 +371,7 @@ The booking's location and price are checked in the same write:
 | `400` | `BAD_REQUEST` | The location is the wrong type for `locationType`, or a travel zone of another supplier. `message` names it, such as "Location loc_01kx16f2a0h8a2my9u3f4tv0sp has locationType TRAVEL_ZONE, expected PHYSICAL for this booking". |
 | `422` | `UNPROCESSABLE_ENTITY` | A `PHYSICAL` Location has no coordinates: "Location loc_01kx16f2a0h8a2my9u3f4tv0sp is missing latitude/longitude coordinates". The business fixes the Location. Resending won't help. |
 | `422` | `OFFERING_NOT_PRICED` | The offering has no `DEFAULT` price rule: "Offering has no DEFAULT price rule". The business adds one. Resending won't help. |
+| `422` | `NOT_SELLABLE` | A line's offering isn't `ACTIVE`: "Offering off_01kx16f2a0h8a2my9u3f4tv0sp is INACTIVE and is not sold; only ACTIVE offerings take new bookings and orders". The business reactivates it, or you book another offering. Resending won't help. |
 
 <Note>
   **Note fan-out is non-atomic.** If a note write fails after the
@@ -363,7 +416,20 @@ A change is refused, with nothing written, when:
 | `409` | `OCCUPANCY_CONTENTION` | The supplier's calendar is under heavy concurrent writes. Retry. |
 | `404` | `NOT_FOUND` | The booking, the supplier or the location doesn't exist. |
 | `400` | `BAD_REQUEST` | The booking can't take the location change, for example a travel zone of another supplier. |
+| `422` | `BOOKING_NOT_AMENDABLE` | You changed the time or supplier of a booking that isn't `SCHEDULED` or `STARTED`. Its other fields can still be edited. |
 | `422` | `UNPROCESSABLE_ENTITY` | The booking's `PHYSICAL` Location has no coordinates. |
+
+Only a `SCHEDULED` or `STARTED` booking can move in time or change supplier.
+Once it has been reported on, settled or cancelled, the move is refused:
+
+```json
+{
+  "code": "BOOKING_NOT_AMENDABLE",
+  "message": "Booking bk_01kv60qge5eh59ap0gw0pqrrys is AWAITING_CONFIRMATION: only a scheduled or started booking can have its time, supplier or duration changed",
+  "statusCode": 422,
+  "requestId": "2d7e4b9a-6c13-4f80-a5e2-8b1c3d9f6a47"
+}
+```
 
 A supplier can also cancel or move their own booking from your portal, when
 the service's [participant settings](/concepts/booking-engine-model#participant-settings)
@@ -400,11 +466,16 @@ window.
 Group bookings (`capacity > 1`) support a participant list:
 
 - `POST .../bookings/{bookingId}/participants` — register a client.
-  409 if capacity is full or the client is already on the list.
+  409 if capacity is full or the client is already on the list. Only a
+  `SCHEDULED` or `STARTED` booking takes a registration: anything else is
+  `422 BOOKING_NOT_OPEN_FOR_PARTICIPANTS`. A removed participant can be
+  registered again.
 - `GET .../bookings/{bookingId}/participants` — list the current
   roster. Not paginated — bounded by capacity.
 - `POST .../bookings/{bookingId}/participants/{clientId}/check-in` —
-  mark a participant as checked in.
+  mark a participant as checked in. An `AWAITING_CONFIRMATION` booking still
+  takes a check-in. A settled, disputed or cancelled one is
+  `422 BOOKING_NOT_OPEN_FOR_PARTICIPANTS`.
 - `DELETE .../bookings/{bookingId}/participants/{clientId}` — cancel
   the participant (soft-delete; capacity recovers).
 

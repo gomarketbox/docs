@@ -169,6 +169,13 @@ succeeds even while the order is still `DRAFT` and unpaid. A `CANCELLED`
 order is the one exception: its credits were released when it was cancelled,
 so it plans and books nothing (`409 ORDER_CANCELLED`).
 
+Credits outlive the catalog. A booking against an order item already bought
+succeeds after its service leaves `LIVE`, or its package is `ARCHIVED`. Only
+its offering must still be `ACTIVE`: otherwise the booking is
+`422 NOT_SELLABLE`. New orders, by contrast, need a `LIVE` service and an
+`ACTIVE` offering. See
+[What the status controls](/resources/services#what-the-status-controls).
+
 Payment — via Stripe or a manual transaction — settles the order. It moves
 money and updates the order's status and paid amount. The API-key booking
 routes don't check it.

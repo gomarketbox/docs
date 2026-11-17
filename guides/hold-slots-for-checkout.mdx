@@ -527,12 +527,30 @@ export async function POST(request: Request) {
 ```
 
 <Note>
-Release is **idempotent and never an error** — always `200`. An already
-released hold returns `RELEASED`; an already converted one returns
-`CONVERTED` (it is booked and cannot be un-booked this way); an unknown
-`reservationId` returns `NOT_FOUND`. All three are terminal states, not
-failures — safe to call blindly on an abandon/cleanup path.
+Release is **idempotent**. An already released hold returns `RELEASED`. An
+already converted one returns `CONVERTED`: it is booked and can't be
+un-booked this way. An unknown `reservationId` returns `NOT_FOUND`. All
+three are `200`s and final states, not failures.
 </Note>
+
+<Warning>
+**Release can return `409 OCCUPANCY_CONTENTION`.** When other writes keep
+winning the race for the supplier's calendar, the API retries the release,
+then gives up:
+
+```json
+{
+  "code": "OCCUPANCY_CONTENTION",
+  "message": "The supplier calendar is under contention; retry.",
+  "statusCode": 409,
+  "requestId": "4d9a2f7c-8e1b-4b63-a5d0-6c2e9f1a3b75"
+}
+```
+
+The hold is still `HELD`, so the time stays blocked. Retry the release after
+a short, jittered pause. If you stop retrying, the hold still lapses on its
+own at `heldUntil`.
+</Warning>
 </Step>
 
 </Steps>
@@ -745,6 +763,12 @@ except `OCCUPANCY_CONTENTION` is worth retrying unchanged.
 | `422` | `BEST_EFFORT_NOT_ENABLED` | `atomicity: "best_effort"`, but the project's `suggestionConfig.allowPartialPackages` is off. | Convert with `all_or_nothing` (15 sessions or fewer), or ask the business to enable partial packages. |
 | `400` | `NOT_A_PACKAGE_SERVICE` | The `PACKAGE` item's service has no active `PACKAGE` business model. | The business turns on a `PACKAGE` business model for the service. See [Packages](/resources/packages). |
 
+### Releasing a hold — `POST /holds/{reservationId}/release`
+
+| Status | `code` | What it means | What to do |
+| --- | --- | --- | --- |
+| `409` | `OCCUPANCY_CONTENTION` | Other writes kept winning the race for the supplier's calendar through every internal retry. The hold is still `HELD`. | **Retryable.** Resend the release after a short jittered backoff. If you stop, the hold still lapses at `heldUntil`. |
+
 <Note>
 `GET /holds/{reservationId}` is your debugger. It returns the reservation
 exactly as convert will read it — including `locationType`, `locationId`,
@@ -761,7 +785,7 @@ first: nine times in ten the interval is missing the field the booking needs.
 | `/v1/projects/{projectId}/holds` | `POST` | `x-api-key` | Hold supplier time. Exactly one of `intervals` (single session or any explicit time — each interval requires `bookingTz` + `locationType`), `slateId`, or `slotIds`. Pass `reservationId` to **extend** an existing hold. Returns `reservationId` + `heldUntil`. |
 | `/v1/projects/{projectId}/holds/{reservationId}` | `GET` | `x-api-key` | Read a hold — `status`, `heldUntil`, and the full intervals it claims (including `locationType`, `locationId`, coordinates and `address`). |
 | `/v1/projects/{projectId}/holds/{reservationId}/convert` | `POST` | `x-api-key` | Turn the hold into confirmed bookings against `{ orderId, orderItemId }`. Branches on the order item's `skuType`. Idempotent — safe to retry. Response is **not** wrapped in `{ data }`. |
-| `/v1/projects/{projectId}/holds/{reservationId}/release` | `POST` | `x-api-key` | Free the time immediately. Idempotent — always `200`. |
+| `/v1/projects/{projectId}/holds/{reservationId}/release` | `POST` | `x-api-key` | Free the time immediately. Idempotent. `409 OCCUPANCY_CONTENTION` under heavy contention leaves the hold `HELD`: retry. |
 | `/v1/projects/{projectId}/availability/package-slate` | `POST` | `x-api-key` | Build the slate whose `slateId` the package form holds. See [Availability and slates](/guides/availability-and-slates). |
 | `/v1/projects/{projectId}/orders` | `POST` | `x-api-key` | Create the order whose item funds the conversion (`SINGLE_SESSION` or `PACKAGE`). |
 

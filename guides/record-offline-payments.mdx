@@ -46,11 +46,22 @@ What the order still owes is `total.amount - amountPaid.amount -
 (amountComped?.amount ?? 0)`. For a `total` of `9000` with `4500` paid, the
 balance is `4500`, which is $45.00.
 
-**The recording route doesn't check the order's status.** A payment on a
-`PAID` or `CANCELLED` order is recorded, and `amountPaid` rises, but the
-status doesn't change. Nothing in the API can give that money back: refunds
-are made in the MarketBox dashboard. So read the order first, and refuse to
-take money against one that's already settled or cancelled.
+**A `CANCELLED` order takes no payment or comp.** The recording is a `422`,
+and nothing is written:
+
+```json
+{
+  "code": "ORDER_NOT_PAYABLE",
+  "message": "Order ord_01kx16f2a0h8a2my9u3f4tv0sp is CANCELLED and cannot take a payment",
+  "statusCode": 422,
+  "requestId": "4a7d2c91-6e3b-4f58-b1a0-8c5e2d9f3b17"
+}
+```
+
+**A `PAID` order isn't checked.** A payment on it is recorded, and
+`amountPaid` rises past `total`. Nothing in the API can give that money back:
+refunds are made in the MarketBox dashboard. So read the order first, and
+refuse to take money against one that's already settled.
 
 ## Step 2: Record the money
 
@@ -307,7 +318,8 @@ for (const row of rows) {
 
 For "which orders were settled in cash last month",
 `GET /orders?paymentMethod=CASH` is quicker, but it misses `MIXED` orders and
-orders not yet `PAID`. See
+orders not yet `PAID`. A cash order you later cancelled still appears, with
+`status: "CANCELLED"`. See
 [Summing the ledger](/resources/transactions#summing-the-ledger).
 
 ## Reference
@@ -334,5 +346,6 @@ orders not yet `PAID`. See
 | The order changed during the write | `VERSION_CONFLICT` | `409` | Retry with the same `idempotencyKey`. |
 | The key was used but its row can't be read | `TRANSACTION_IDEMPOTENCY_RECORD_MISSING` | `409` | Terminal. Don't retry. Contact support with the `requestId`. |
 | The same key sent again | — | `200` | Not an error: `replayed: true`, nothing recorded. |
-| A payment on a `PAID` or `CANCELLED` order | — | `201` | Recorded, and `amountPaid` rises. Check the status before you record. |
+| A payment or comp on a `CANCELLED` order | `ORDER_NOT_PAYABLE` | `422` | Don't retry. A cancelled order takes no new money. |
+| A payment on a `PAID` order | — | `201` | Recorded, and `amountPaid` rises past `total`. Check the status before you record. |
 | Asking for `PAID` on the status route | `ORDER_NOT_SETTLED` | `409` | Record the money instead. |

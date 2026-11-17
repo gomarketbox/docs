@@ -558,6 +558,7 @@ planned from the same credit, so the client can pick one and you book its
 | Booking another client's order | `NOT_FOUND` | `404` | Book only credits from `GET /clients/me/credits`. |
 | Booking a credit the list would not show (unpaid, used up, expired, removed) | `CREDIT_NOT_BOOKABLE` | `409` | Re-read the credits and offer only those listed. |
 | Booking a `slateId` planned from a `packageId` or another credit | `NOT_FOUND` | `404` | Plan the slate from this credit (Step 3). |
+| A session's offering is no longer `ACTIVE` | `NOT_SELLABLE` | `422` | "Offering off_… is INACTIVE and is not sold; only ACTIVE offerings take new bookings and orders". A credit already bought stays bookable when its service stops being `LIVE`, but not when its offering is deactivated. The business reactivates the offering. Don't retry. |
 | A slot was taken between planning and booking | `SLOT_NO_LONGER_BOOKABLE` | `409` | Offer `freshSuggestions`, then book with a new `idempotencyKey`. |
 | Same `idempotencyKey`, different body | `IDEMPOTENCY_KEY_CONFLICT` | `409` | Use a new key for each distinct attempt. The same key and body replays the first `201`. |
 | More than 15 sessions with `all_or_nothing` | `PACKAGE_SLATE_TOO_LARGE_FOR_ATOMIC` | `422` | Book with `best_effort` if the project allows partial packages, or book fewer sessions. |

@@ -358,7 +358,8 @@ for you on the single-booking path.
 | The service has no active `SINGLE_BOOKING` rate, on order create | `SERVICE_NOT_SOLD_AS` | `422` | The service isn't sold as a single session. Sell an offering of a service that is, or ask the business to add the rate. |
 | Order item has no quantity left to draw down | `ORDER_ITEM_QUANTITY_UNAVAILABLE` | `400` | A `SINGLE_SESSION` item only funds one booking. Create a new order for another session. |
 | The order is `CANCELLED` | `ORDER_CANCELLED` | `409` | Its credits were released when it was cancelled. Don't retry; create a new order. `DRAFT`, `PENDING` and `PAID` orders book as before. |
-| Offering isn't `ACTIVE` | `BAD_REQUEST` | `400` | Only active offerings can be booked or ordered. |
+| On order create: the service isn't `LIVE` or was deleted, or the offering isn't `ACTIVE` | `NOT_SELLABLE` | `422` | `message` names the id and its status, such as "Service srv_… is DRAFT and is not sold; only LIVE services take new bookings and orders". Sell another service or offering. Don't retry. |
+| On booking create: the line's offering isn't `ACTIVE` | `NOT_SELLABLE` | `422` | "Offering off_… is INACTIVE and is not sold; only ACTIVE offerings take new bookings and orders". A service that stopped being `LIVE` after the order was placed still books. Don't retry. |
 | The offering has no `DEFAULT` price rule, on order create or booking create | `OFFERING_NOT_PRICED` | `422` | The business adds a `DEFAULT` rule to the offering. Don't retry. |
 | `locationId` names no Location or travel zone in this project | `NOT_FOUND` | `404` | The message is `Booking location loc_… not found`. Take the id from `GET /locations` or the supplier's travel zone. |
 | The location is the wrong type for `locationType`, or another supplier's travel zone | `BAD_REQUEST` | `400` | `message` names the id and the type. Send a `loc_` id for `PHYSICAL` and the supplier's own `stz_` id for `TRAVEL_ZONE`. |

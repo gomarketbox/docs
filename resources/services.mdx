@@ -65,17 +65,30 @@ only `LIVE` services. A `DRAFT` or `INACTIVE` service stays linked to its
 suppliers but doesn't appear. A status change can take up to a minute to show
 there.
 
-**The status doesn't gate orders or bookings.** `POST /orders`,
-`POST .../orders/{orderId}/items`, `POST /bookings` and hold conversion check
-the **offering's** status, not the service's. An `ACTIVE` offering of a
-`DRAFT` or `INACTIVE` service can still be ordered and booked through the API.
-So:
+**Only a `LIVE` service sells.** `POST /orders` and
+`POST .../orders/{orderId}/items` refuse a line for a service that isn't
+`LIVE`, or was deleted.
 
-- Show clients only services you listed with `status=LIVE`.
-- To stop a service selling, set its offerings `INACTIVE` as well as the
-  service. See [The offering lifecycle](#the-offering-lifecycle).
+The refusal is a `422`, and nothing is written:
 
-Bookings and orders already placed are never touched by a status change.
+```json
+{
+  "code": "NOT_SELLABLE",
+  "message": "Service srv_01kv60qg12e82acr78edfnjhvv is DRAFT and is not sold; only LIVE services take new bookings and orders",
+  "statusCode": 422,
+  "requestId": "2d9f6a13-8b4e-4c07-9e51-6f3a2b8c1d40"
+}
+```
+
+A deleted service says `Service srv_… was deleted and is no longer sold`.
+
+Retiring a service stops new sales only. Order items already bought stay
+bookable: `POST /bookings`, package bookings and hold conversion don't check
+the service's status. They check only the offering, which must still be
+`ACTIVE`. Bookings and orders already placed are never touched by a status
+change.
+
+Show clients only services you listed with `status=LIVE`.
 
 ### Deleting a service
 
@@ -103,6 +116,7 @@ offerings without checking the service.
 | `categoryId`, `categorySnapshot` | The service's category. `categorySnapshot` carries the category's name only when the category was created inline with `newCategory`; otherwise its names are empty. It isn't refreshed when `categoryId` changes. |
 | `taxSettings` | `{ taxable, taxPercentage }`. The last fallback for tax when no price rule sets it. See [How tax is computed](/resources/orders#how-tax-is-computed). |
 | `participantSettings` | What suppliers and clients may do with, and see on, bookings of this service. See [Participant settings](/concepts/booking-engine-model#participant-settings). |
+| `bufferBeforeStartMinutes` | Minutes a supplier needs free before this service starts, an integer from `0` to `120`. Defaults to `0`. See [Buffer before start](#buffer-before-start). |
 | `counts.offerings` | How many offerings the service has. Use it to decide whether to fetch them. |
 | `createdAt`, `updatedAt`, `createdBy`, `updatedBy` | Audit fields. |
 
@@ -133,6 +147,8 @@ A service has no `externalId`. Store the `serviceId` against your own record.
   Each one takes the same fields as
   [Adding a business model](#adding-a-business-model).
 - `taxSettings` defaults to `{ "taxable": false }`.
+- `bufferBeforeStartMinutes` defaults to `0`. See
+  [Buffer before start](#buffer-before-start).
 
 Names are unique in a project, per language. The comparison ignores case,
 surrounding spaces and repeated spaces, but not accents or punctuation. A
@@ -169,6 +185,26 @@ fields. Send only the fields you're changing, but send each one whole:
   every language at once.
 
 `status` isn't settable here. Use the status route.
+
+### Buffer before start
+
+`bufferBeforeStartMinutes` is the spacing a supplier needs before this
+service starts, such as time to set up. Send an integer from `0` to `120` on
+create or update:
+
+```json
+{ "bufferBeforeStartMinutes": 15 }
+```
+
+A value outside that range is a `400 VALIDATION_ERROR`.
+
+The buffer shapes suggestions and checks only:
+
+- Suggested times leave the buffer free before each session of this service.
+- It applies to online sessions too, not only to sessions with travel.
+- It's never written as busy time, so it never blocks another booking.
+- `travelTimeMins` never includes it.
+- A booking at a time you name is never refused because of it.
 
 ## Listing services
 
@@ -244,15 +280,11 @@ paginated.
 - `type` can't be changed. To sell the service another way, turn this model
   off and add a new one.
 - There is no delete. Turn the model off instead.
+- An unknown `businessModelId` is `404 NOT_FOUND`, "Business model not found",
+  on both routes. Nothing is written.
 
 A fee on an inactive business model is stored but never charged, because an
 order line resolves only against active models.
-
-`PUT .../business-models/{businessModelId}` with an unknown id is
-`404 NOT_FOUND`, "Business model not found", and nothing is written. The
-status route doesn't check that the `businessModelId` exists: a mistyped id
-writes a new, partial record instead of returning `404`. Use the ids from the
-create response or the list.
 
 **Turning off the `PACKAGE` model does more than stop new packages.** While
 the service has no active `PACKAGE` model:
@@ -310,21 +342,23 @@ ACTIVE ◄──► INACTIVE
 with `{ "status": "INACTIVE" }` takes it off sale, and `ACTIVE` puts it back.
 Either move is allowed at any time.
 
-Only an `ACTIVE` offering can be ordered or booked. An order line for an
-`INACTIVE` one is a `400`:
+Only an `ACTIVE` offering can be ordered or booked. An order line, a booking,
+a package booking or a hold conversion for an `INACTIVE` one is a `422`:
 
 ```json
 {
-  "code": "BAD_REQUEST",
-  "message": "Offering off_01kv60qgs4e4nbjhzradnqtj0h is not orderable (status: INACTIVE)",
-  "statusCode": 400,
+  "code": "NOT_SELLABLE",
+  "message": "Offering off_01kv60qgs4e4nbjhzradnqtj0h is INACTIVE and is not sold; only ACTIVE offerings take new bookings and orders",
+  "statusCode": 422,
   "requestId": "4e8b2d6a-7c1f-4a93-b0d5-2a9e6c3f1b74"
 }
 ```
 
-`POST /bookings` and hold conversion answer the same way, with
-`is not bookable` in the message. Bookings already made against the offering
-stand.
+This applies to order items already bought, too. Bookings already made
+against the offering stand.
+
+An unknown or deleted `offeringId` on the status route is `404 NOT_FOUND`,
+"Offering not found", and nothing is written.
 
 ### Anatomy of an offering
 
@@ -400,8 +434,8 @@ A rule set that breaks one of these is a `400`, and nothing is written. The
 #### An offering with no DEFAULT rule
 
 Create and update refuse a rule set with no `DEFAULT` rule. An offering can
-still end up without one, for example a stub written by the status route to a
-mistyped id. Any write that prices such an offering returns a `422`:
+still end up without one, for example one written before that check existed.
+Any write that prices such an offering returns a `422`:
 `POST /orders`, `POST .../orders/{orderId}/items`, `POST /bookings`, a package
 booking and hold conversion.
 
@@ -459,9 +493,7 @@ the fields you send are written.
   price applies to new order lines only.
 
 An unknown or deleted `offeringId` is `404 NOT_FOUND`, "Offering not found",
-and nothing is written. The status route doesn't check that the offering
-exists: a mistyped id writes a new, partial record instead of returning `404`.
-Use the ids from the create response or the list.
+and nothing is written.
 
 ### Deleting an offering
 
@@ -470,8 +502,9 @@ Use the ids from the create response or the list.
 one. The record is kept, so bookings and order items that captured it still
 resolve. The API can't undo a delete.
 
-Delete doesn't check the id either. An unknown or already-deleted
-`offeringId` still returns `204`, and still lowers `counts.offerings`.
+An unknown or already-deleted `offeringId` is `404 NOT_FOUND`, "Offering not
+found", and changes nothing. So a retried delete is safe: treat its `404` as
+done.
 
 Packages built on the offering aren't deleted with it, and keep selling. But
 sessions bought from them can no longer be booked: each booking is
