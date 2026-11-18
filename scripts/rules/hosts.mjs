@@ -40,7 +40,6 @@ const ALWAYS_ALLOWED = new Set([
   'mintlify.com', // README.md — the docs framework this site is built on
   'marketboxinc.mintlify.app', // README.md — Mintlify's default subdomain; docs.gomarketbox.com is the custom domain
   'bitbucket.org', // README.md — link to the mb-core source repo
-  'mb-core.vercel.app', // dev dashboard — production app.gomarketbox.com isn't live yet
   'example.com', // RFC 2606 reserved placeholder host, used for made-up example values
 ]);
 

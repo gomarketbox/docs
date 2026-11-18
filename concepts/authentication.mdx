@@ -24,8 +24,11 @@ its query string instead of an API key. See
 ```http
 GET /v1/projects/prj_acme/bookings HTTP/1.1
 Host: $MARKETBOX_API_URL
-x-api-key: mb_live_********************************
+x-api-key: $MARKETBOX_API_KEY
 ```
+
+The key value is an opaque string. It has no prefix, and nothing in it names
+an environment or a project.
 
 ### When the key is missing or wrong
 
@@ -142,6 +145,40 @@ A key minted before capabilities existed carries no list, and is treated as
 A key that holds only some capabilities gets the same `code`, and a `message`
 naming what it holds. To fix it, a project admin ticks **Standard API access**
 on the Application. A key may hold `*` and `events:write` together.
+
+## Test keys and sandbox
+
+MarketBox has one kind of API key. There are no test keys, and there is no
+sandbox.
+
+- **Every key is live.** A key acts on the real data of its project. A booking
+  you create claims the supplier's time, and MarketBox sends the
+  [emails](/concepts/emails) it sends for any booking.
+- **Card payments are live too.** A card you charge through
+  [Accept payments with Stripe](/guides/accept-payments-with-stripe) is really
+  charged. Stripe's test cards are declined.
+
+To try the API without touching a live business, use a separate project. Each
+project has its own services, suppliers, clients, bookings and orders, and a
+key minted in one project can't read or write another. Create your test
+services, suppliers and clients there, and use people and email addresses you
+control.
+
+## Rate limits
+
+Only the site-events routes enforce a per-key rate limit today.
+
+| Routes | Limit per key | Past the limit |
+| --- | --- | --- |
+| `POST /v1/projects/{projectId}/events` and `POST /v1/projects/{projectId}/events/beacon` | About 50 requests a second, with bursts of 100. | `429 RATE_LIMITED` with a `Retry-After` header. |
+| Every other route | No per-key limit and no daily quota. | — |
+
+Don't build on the absence of a limit. Keep your request rate steady, and
+don't poll faster than
+[Tracking state without webhooks](/concepts/tracking-state-without-webhooks)
+suggests. Under heavy load any route can answer `429` or `503`: wait for the
+`Retry-After` header, or back off when there isn't one, then resend the same
+request. See [Retry guidance](/concepts/errors#retry-guidance).
 
 ## Rotating keys
 

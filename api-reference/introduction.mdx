@@ -33,8 +33,11 @@ See [Authentication](/concepts/authentication) and
 model.
 
 ```http
-x-api-key: mb_test_********************************
+x-api-key: $MARKETBOX_API_KEY
 ```
+
+There is one kind of key: no test keys and no sandbox. See
+[Test keys and sandbox](/concepts/authentication#test-keys-and-sandbox).
 
 ## Conventions
 
@@ -50,6 +53,9 @@ The same shapes show up everywhere:
   See [Timezones](/concepts/timezones).
 - **Money** is `{ amount: integer, currency: 3-letter ISO }` — amounts
   are integers in the currency's **minor unit** (cents, pence, etc.).
+- **Rate limits** apply per key on the site-events routes only: about 50
+  requests a second, with bursts of 100, then `429 RATE_LIMITED`. See
+  [Rate limits](/concepts/authentication#rate-limits).
 
 ## Tags
 
