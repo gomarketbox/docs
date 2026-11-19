@@ -164,22 +164,6 @@ key minted in one project can't read or write another. Create your test
 services, suppliers and clients there, and use people and email addresses you
 control.
 
-## Rate limits
-
-Only the site-events routes enforce a per-key rate limit today.
-
-| Routes | Limit per key | Past the limit |
-| --- | --- | --- |
-| `POST /v1/projects/{projectId}/events` and `POST /v1/projects/{projectId}/events/beacon` | About 50 requests a second, with bursts of 100. | `429 RATE_LIMITED` with a `Retry-After` header. |
-| Every other route | No per-key limit and no daily quota. | — |
-
-Don't build on the absence of a limit. Keep your request rate steady, and
-don't poll faster than
-[Tracking state without webhooks](/concepts/tracking-state-without-webhooks)
-suggests. Under heavy load any route can answer `429` or `503`: wait for the
-`Retry-After` header, or back off when there isn't one, then resend the same
-request. See [Retry guidance](/concepts/errors#retry-guidance).
-
 ## Rotating keys
 
 To rotate:
