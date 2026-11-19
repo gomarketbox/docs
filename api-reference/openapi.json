@@ -10,8 +10,8 @@
   },
   "servers": [
     {
-      "url": "https://rtgic12qk9.execute-api.us-east-1.amazonaws.com/dev",
-      "description": "Development"
+      "url": "https://apiv2.gomarketbox.com",
+      "description": "MarketBox Open API"
     }
   ],
   "security": [

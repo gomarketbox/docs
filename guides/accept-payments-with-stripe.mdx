@@ -74,7 +74,7 @@ sequenceDiagram
 <Steps>
 <Step title="The business connects its Stripe account">
 Before you can charge, a project admin connects the business's Stripe account on
-the project's [**Payments** settings page](https://mb-core.vercel.app/dashboard/project/{projectId}/settings/payments/)
+the project's [**Payments** settings page](https://app.gomarketbox.com/dashboard/project/{projectId}/settings/payments/)
 in the MarketBox dashboard. This is a one-time action per business, done through
 Stripe's hosted onboarding.
 
@@ -388,11 +388,15 @@ A client who closes the tab before the poll ends still pays. Keep the
 
 ## Test it
 
-Use Stripe **test mode** and the standard test card:
+The API charges in Stripe **live mode**. There is no test mode, and Stripe's
+test cards, such as `4242 4242 4242 4242`, are declined. To check your flow end
+to end, pay a small real amount in a project you control:
 
 <Steps>
-<Step title="Pay with a test card">
-Card **`4242 4242 4242 4242`**, any future expiry, any CVC and postal code.
+<Step title="Pay with a real card">
+Use your own card, on an order above Stripe's minimum charge (below). The
+business refunds it afterwards in the MarketBox dashboard: the API has
+[no refund route](/concepts/what-the-api-doesnt-do#no-refunds).
 </Step>
 <Step title="Confirm the order is paid">
 Poll the order (Step 4) — it should flip to `PAID` within a few seconds, with

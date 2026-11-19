@@ -26,7 +26,10 @@ The job has two halves, and the second is where the value is:
 
 - Docs repo: this repo (`C:\_dev\2.0\docs`), deploys from `main` via the Mintlify GitHub app.
 - mb-core: sibling repo `../mb-core`, branch **`dev`** (what the dev server runs; `master` is its default branch).
-- The environment these docs describe = `servers[0].url` in the spec (currently the dev API Gateway).
+- The environment these docs describe = `servers[0].url` in the spec: **production**,
+  `https://apiv2.gomarketbox.com`, since 2026-11-18 (it was the dev API Gateway before).
+  mb-core's `dev` is usually ahead of prod, so step 3 reports `DIFFERENT` for anything
+  merged to `dev` but not yet released: sync after the `dev → prod` release that carries it.
 - Diff script: `.claude/skills/sync-api-docs/scripts/spec-diff.mjs` (Node, no dependencies).
 - Scratch files (old spec snapshots, reports) go in your scratchpad, never in the repo.
 - Run the shell steps in **Git Bash** (the Bash tool). Use **absolute paths**

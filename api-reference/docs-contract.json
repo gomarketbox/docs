@@ -1,6 +1,6 @@
 {
-  "baseUrl": "https://rtgic12qk9.execute-api.us-east-1.amazonaws.com/dev",
-  "hostAllowlist": ["rtgic12qk9.execute-api.us-east-1.amazonaws.com"],
+  "baseUrl": "https://apiv2.gomarketbox.com",
+  "hostAllowlist": ["apiv2.gomarketbox.com"],
   "idPrefixes": [
     "act",
     "alloc",

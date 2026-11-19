@@ -139,7 +139,7 @@
     "primary": {
       "type": "button",
       "label": "Dashboard",
-      "href": "https://mb-core.vercel.app/dashboard"
+      "href": "https://app.gomarketbox.com/dashboard"
     }
   },
   "contextual": {

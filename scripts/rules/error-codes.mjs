@@ -46,6 +46,10 @@ const NOT_CODES = new Set([
   // real field, so they can't appear in an openapi.json enum.
   'PROJECT_ID', 'SERVICE_ID', 'OFFERING_ID', 'BOOKING_ID', 'ORDER_ID',
   'CLIENT_ID', 'SUPPLIER_ID', 'PACKAGE_ID',
+  // quickstart.mdx: shell variables its copy-paste curl examples read, set by
+  // `export` a few lines above each use. Like the placeholder ids above, they
+  // stand in for values the reader supplies and are never a `code`.
+  'ORDER_ITEM_ID', 'BOOKING_START_UTC', 'BOOKING_END_UTC',
   // Environment variable names, quoted verbatim in setup/auth instructions.
   'MARKETBOX_API_KEY', 'MARKETBOX_API_URL', 'MARKETBOX_PROJECT_ID',
   // HTTP-header/auth-scheme-shaped tokens in prose and tables — not JSON

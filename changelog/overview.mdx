@@ -3,6 +3,30 @@ title: "Changelog"
 description: "New features, updates, and fixes to the MarketBox API."
 ---
 
+<Update label="November 18, 2026" tags={["Docs"]}>
+
+## These docs now describe the production API
+
+The docs, the API reference and its "try it" console now name the production API instead of a development host. Nothing in the API's behaviour changed.
+
+**Changed**
+
+- **Base URL.** Every page reads `MARKETBOX_API_URL`, and its value is now the production host. See [Make your first call](/quickstart#2-make-your-first-call). Dashboard links go to the production dashboard.
+- **Keys belong to one environment.** A key minted against the development host isn't recognised by the production API. Mint a key in the production dashboard: see [Get a project and an API key](/quickstart#1-get-a-project-and-an-api-key).
+- **The "try it" console sends real requests to production.** A booking you create there is a real booking.
+
+**Added**
+
+- **Quickstart** — signing up, creating a project, where the API key and the project ID are, what a first booking needs, and TypeScript for the order and the booking. The booking example no longer uses a fixed date.
+- **[Test keys and sandbox](/concepts/authentication#test-keys-and-sandbox)** — there is one kind of key, and no sandbox.
+
+**Fixed**
+
+- **Key prefixes.** Examples showed keys starting `mb_live_` and `mb_test_`. Keys have no prefix.
+- **Testing payments.** [Accept payments with Stripe](/guides/accept-payments-with-stripe#test-it) said to use Stripe test mode. Production charges in live mode, and test cards are declined.
+
+</Update>
+
 <Update label="November 17, 2026 (reference corrections)" tags={["API"]}>
 
 ## API reference corrections for the November 17 release

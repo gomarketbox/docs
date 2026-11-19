@@ -137,6 +137,28 @@ test('terminology rule flags banned JSON keys inside fenced blocks, but not thir
   assert.match(findings[0].message, /providerId/);
 });
 
+// The dashboard labels its client list "Customers" and its button "New
+// customer". A page that tells the reader what to click may quote those two
+// labels, exactly and in bold. Everything else still fires: the same word
+// without bold, a bold word that is not one of the labels, and prose on the
+// same line as an allowed label.
+test('terminology rule allows exact bold dashboard labels, and nothing looser', async () => {
+  const contractWithCustomer = {
+    ...CONTRACT,
+    terminology: [...CONTRACT.terminology, { banned: 'customer', use: 'client', allowedIn: [] }],
+  };
+
+  const findings = await runRules(
+    join(import.meta.dirname, '__fixtures__', 'terminology-ui-labels'),
+    contractWithCustomer,
+    { paths: {} },
+    [terminology],
+  );
+
+  assert.deepEqual(findings.map((f) => f.line), [7, 9, 11]);
+  for (const f of findings) assert.match(f.message, /say "client", not "customer"/);
+});
+
 // Fix round 1 (task-10-report.md): MARKETBOX_API_URL and API_BASE_URL (same
 // for MARKETBOX_PROJECT_ID / PROJECT_ID) were both live in the docs at once,
 // meaning two internally-consistent pages could disagree with each other.
