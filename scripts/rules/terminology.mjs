@@ -66,6 +66,28 @@ const THIRD_PARTY_KEYS = new Set([
   'customer_details',
 ]);
 
+/**
+ * Dashboard labels that contain a banned word, quoted exactly as the
+ * dashboard shows them and in bold (the docs' convention for UI elements).
+ *
+ * The dashboard calls its client list "Customers" and the button that adds
+ * one "New customer". A page that tells the reader what to click has to name
+ * the label they will see: "the client list" is not on their screen. Without
+ * this the quickstart could only point at the glossary.
+ *
+ * Exact strings, like THIRD_PARTY_KEYS above, rather than "anything in bold":
+ * bold is also used for emphasis in prose, and a rule that skipped all bold
+ * text would let "**customers** can book" through. Add a label here only
+ * when it is copied from the dashboard as it is today, and remove it when
+ * the dashboard renames it.
+ */
+const UI_LABELS = ['**Customers**', '**New customer**'];
+
+/** The line with every exact UI label removed, so only prose is tested. */
+function withoutUiLabels(text) {
+  return UI_LABELS.reduce((line, label) => line.split(label).join(' '), text);
+}
+
 /** A JSON-ish object key: `"someKey":`. Only the key is captured — matching
  *  stops at the colon, so string *values* are never inspected here. */
 const KEY_RE = /"([A-Za-z_][A-Za-z0-9_]*)"\s*:/g;
@@ -117,10 +139,12 @@ export default {
         continue;
       }
 
+      const prose = withoutUiLabels(text);
+
       for (const { banned, use, allowedIn } of contract.terminology) {
         if (allowedIn?.includes(page.path)) continue;
         const re = new RegExp(`\\b${banned}s?\\b`, 'i');
-        if (!re.test(text)) continue;
+        if (!re.test(prose)) continue;
 
         findings.push({
           rule: 'terminology',

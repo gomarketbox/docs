@@ -46,7 +46,7 @@ Use these words, consistently — they are the words the API itself uses.
 | Term | Meaning | Don't say |
 | --- | --- | --- |
 | **project** | The tenant. Everything is scoped to one. | account, workspace, org |
-| **client** | The person the service is for. | customer, end user¹ |
+| **client** | The person the service is for. | customer³, end user¹ |
 | **supplier** | The person or resource delivering the service. | provider, staff, vendor |
 | **service** | The sellable thing. | product |
 | **offering** | A bookable variant of a service, with duration and pricing. | option, variant |
@@ -58,6 +58,11 @@ Use these words, consistently — they are the words the API itself uses.
 ¹ "end user" has a specific meaning in auth: the human holding the Cognito JWT.
 Use it only when discussing the end-user auth plane.
 ² "session" is correct for the individual bookings a package funds.
+³ The dashboard labels its client list **Customers** and the button that adds
+one **New customer**. Quote those two labels, exactly and in bold, only when you
+tell the reader what to click, and say once that it is the dashboard's name for
+clients. The checker allows exactly those strings (the UI-label list in
+`scripts/rules/terminology.mjs`); everywhere else the word is still "client".
 
 ## Style preferences
 
