@@ -1,0 +1,224 @@
+---
+title: Book for a family member
+description: Let a client add the people they book for, usually their children, book sessions for them, invite them to their own sign-in, and hand an adult their profile. Book for a family member from your server too, with attendeeClientId.
+---
+
+A client can keep a list of **family members**: the people they book for,
+usually their children. Each family member is a client of the business in
+their own right, with their own `clientId` (`cli_…`). The client who added
+them is their **guardian**: they manage the profile and pay for the bookings.
+
+A family member has no email, address or card of their own until they're old
+enough for a sign-in. The guardian pays.
+
+## The routes at a glance
+
+All of these run on the client plane, with your API key and the signed-in
+client's access token.
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | `/clients/me/dependants` | The client's family members. |
+| `POST` | `/clients/me/dependants` | Add a family member. |
+| `PATCH` | `/clients/me/dependants/{dependantId}` | Edit names, date of birth or notes. |
+| `DELETE` | `/clients/me/dependants/{dependantId}` | Remove a family member. Past bookings stay. |
+| `POST` | `/clients/me/dependants/{dependantId}/invite` | Invite a family member aged 12 or more to their own sign-in. |
+| `POST` | `/clients/me/dependants/{dependantId}/release` | Hand an adult family member their own profile. |
+| `GET` | `/clients/me/guardian` | For a signed-in family member: who manages their profile. |
+| `DELETE` | `/clients/me/guardian` | For a signed-in adult family member: take over their own profile. |
+
+`{dependantId}` is the family member's `clientId` from the list.
+
+## Add a family member
+
+```json
+// POST /v1/projects/{projectId}/clients/me/dependants
+{
+  "firstName": "Mia",
+  "lastName": "Tremblay",
+  "dateOfBirth": "2014-06-15",
+  "notes": "Peanut allergy; EpiPen in the blue bag."
+}
+```
+
+Only the names are required. `notes`, up to 1000 characters, is for medical
+and safety information. The business's staff see it; suppliers don't.
+
+A client can have up to 50 family members. One more is `409 FAMILY_LIMIT`. A
+signed-in family member can't add family of their own:
+`409 CLIENT_IS_DEPENDANT`.
+
+`PATCH` changes the names, the date of birth or the notes; `null` clears the
+date of birth or the notes. `DELETE` takes them off the list, so they can't be
+booked for any more. Their past bookings don't change.
+
+The client's profile carries `familyCount`, how many family members they
+manage. It is absent when they never had any.
+
+## What a family member can do at their age
+
+`stage` on each family member says what they can do today. Their age is worked
+out in the business's time zone.
+
+| `stage` | Age | What they can do |
+| --- | --- | --- |
+| `NO_LOGIN` | Under 12, or no date of birth | Nothing themselves. The guardian books for them. |
+| `VIEW_ONLY` | 12 to 15 | With their own sign-in, see their bookings and profile. |
+| `BOOKS_OWN` | 16 to 17 | Also book, cancel and reschedule. The guardian pays. |
+| `ADULT` | 18 and over | Can take over their own profile. |
+
+## Book for a family member
+
+Pass the family member's `clientId` as `attendeeClientId` on the quote:
+
+```json
+// POST /v1/projects/{projectId}/clients/me/booking-quotes
+{
+  "serviceId": "srv_01kv6r83j9fmquwl81xkm5bwj6",
+  "offeringId": "off_01kv6r83j9fmquwl81xkm5bwj6",
+  "supplierId": "sup_01kv6r83j9fmquwl81xkm5bwj6",
+  "startTime": "2026-12-09T19:00:00.000Z",
+  "place": { "locationType": "VIRTUAL" },
+  "attendeeClientId": "cli_01kx3n2p7q9r4s6t8v0w2y4z6a"
+}
+```
+
+The family member attends, and the client still pays. The quote's
+`attendeeClientId` echoes it; it is `null` when the client attends. See
+[Book and pay with a quote](/guides/book-with-a-quote).
+
+`attendeeClientId` works the same way on
+`POST /clients/me/orders/{orderId}/package-bookings`, where the client's own
+credits are used.
+
+Anyone who isn't the client or one of their family members is refused:
+
+```json
+{
+  "code": "ATTENDEE_NOT_ALLOWED",
+  "message": "The attendee must be the client or one of their family members",
+  "statusCode": 422,
+  "requestId": "5c9e2a7b-3f1d-4b86-a0e4-7d2c8f1b6a53"
+}
+```
+
+### From your server with the API key
+
+The API-key booking routes take `attendeeClientId` too:
+
+- `POST /bookings`;
+- `POST /orders/{orderId}/package-bookings`;
+- `POST /holds/{reservationId}/convert`.
+
+The booking's `clientId` is still the guardian, who pays. `attendeeClientId`
+must be one of that client's family members, or the call is
+`422 ATTENDEE_NOT_ALLOWED`. Take the id from the client's
+`GET /clients/me/dependants`.
+
+A booking for a family member carries `attendeeClientId`. It is absent when
+the client attends, and when you send the client's own `clientId`.
+
+On the supplier plane, `GET /suppliers/me/bookings` with `expand=client` adds
+`attendee.displayName` when a family member attends. The name is shown as the
+service's participant settings allow. See
+[Supplier portal: bookings](/guides/supplier-portal-bookings).
+
+## When a family member signs in
+
+### Invite them to their own sign-in
+
+From 12, invite the family member with their own email address:
+
+```json
+// POST /v1/projects/{projectId}/clients/me/dependants/{dependantId}/invite
+{
+  "email": "mia.tremblay@example.com"
+}
+```
+
+MarketBox sends them the business's invitation, the same one the business's
+staff send. The email goes on their profile only when they accept it, signed
+in with that address. The answer is the family member, with
+`invitationStatus: "INVITED"`.
+
+Sending it again re-issues the invitation. You can send one at most every 10
+minutes, and 10 a day per client.
+
+| Situation | Status and `code` |
+| --- | --- |
+| Under 12, or no date of birth | `422 DEPENDANT_TOO_YOUNG` |
+| Another invitation is waiting for this email | `409 EMAIL_INVITATION_PENDING` |
+| They already have a sign-in | `409 CLIENT_ALREADY_LINKED` |
+| Sent less than 10 minutes ago | `429 INVITATION_RECENTLY_SENT` |
+| 10 sent today | `429 FAMILY_INVITE_LIMIT` |
+
+### What a signed-in family member can do
+
+Signed in, the family member uses the same client-plane routes as any client,
+limited by their `stage`:
+
+- From 12, they see their own bookings and profile.
+- From 16, they also book, cancel and reschedule. Their guardian pays, and only
+  later: a card or `payWith: "NOW"` is `422 GUARDIAN_PAYS`. Where the business
+  takes payment when booking, the guardian books instead:
+  `422 GUARDIAN_MUST_BOOK`.
+- Under 16, a booking, cancel or reschedule is refused:
+
+```json
+{
+  "code": "DEPENDANT_TOO_YOUNG",
+  "message": "From 16 you can book, cancel and reschedule your own appointments. Ask the family member who manages your profile.",
+  "statusCode": 409,
+  "requestId": "8a3d1f6c-2e9b-4c75-b0a4-1f7e5d2c9b86"
+}
+```
+
+A signed-in family member sees an empty `GET /clients/me/dependants`.
+`GET /clients/me/guardian` returns the client who manages their profile,
+their `stage`, and `canTakeOver`. For a client who manages their own profile,
+`data` is `null`.
+
+## When a family member turns 18
+
+From 18, the family member can manage their own profile. Either side can end
+the link:
+
+- **The guardian releases them** with
+  `POST /clients/me/dependants/{dependantId}/release`. The family member needs
+  an email of their own first, through an invitation: otherwise it is
+  `409 DEPENDANT_HAS_NO_EMAIL`.
+- **The family member takes over** with `DELETE /clients/me/guardian`, signed
+  in. Show this when `canTakeOver` is `true`.
+
+Before 18, or without a date of birth, both are `422 DEPENDANT_NOT_ADULT`.
+
+Afterwards they book and pay for themselves. The bookings made for them so far
+stay with the guardian, who paid for them, and leave the family member's own
+list. The notes and date of birth the guardian kept are cleared.
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | Auth | Description |
+| --- | --- | --- | --- |
+| `/v1/projects/{projectId}/clients/me/dependants` | `GET` | `x-api-key` + `Bearer` | The client's family members. |
+| `/v1/projects/{projectId}/clients/me/dependants` | `POST` | `x-api-key` + `Bearer` | Add a family member. |
+| `/v1/projects/{projectId}/clients/me/dependants/{dependantId}` | `PATCH` | `x-api-key` + `Bearer` | Edit a family member. |
+| `/v1/projects/{projectId}/clients/me/dependants/{dependantId}` | `DELETE` | `x-api-key` + `Bearer` | Remove a family member. |
+| `/v1/projects/{projectId}/clients/me/dependants/{dependantId}/invite` | `POST` | `x-api-key` + `Bearer` | Invite them to their own sign-in. |
+| `/v1/projects/{projectId}/clients/me/dependants/{dependantId}/release` | `POST` | `x-api-key` + `Bearer` | Hand an adult their profile. |
+| `/v1/projects/{projectId}/clients/me/guardian` | `GET` | `x-api-key` + `Bearer` | Who manages the signed-in client's profile. |
+| `/v1/projects/{projectId}/clients/me/guardian` | `DELETE` | `x-api-key` + `Bearer` | Take over your own profile. |
+| `/v1/projects/{projectId}/clients/me/booking-quotes` | `POST` | `x-api-key` + `Bearer` | Book, with `attendeeClientId`. |
+| `/v1/projects/{projectId}/bookings` | `POST` | `x-api-key` | Book from your server, with `attendeeClientId`. |
+
+### Errors and edge cases
+
+| Scenario | `code` | Status | Resolution |
+| --- | --- | --- | --- |
+| Not one of this client's family members | — | `404` | Re-read `GET /clients/me/dependants`. |
+| An edit raced another one | `CONFLICT` | `409` | Read the family member again and retry. |
+| The attendee isn't the client or one of their family | `ATTENDEE_NOT_ALLOWED` | `422` | Pass a `clientId` from the client's family list. |
+
+See [Errors](/concepts/errors) for the envelope.

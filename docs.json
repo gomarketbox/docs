@@ -65,6 +65,9 @@
               "guides/build-a-supplier-profile-page",
               "guides/booking-addresses",
               "guides/manage-a-client-account",
+              "guides/client-self-service",
+              "guides/book-with-a-quote",
+              "guides/book-for-a-family-member",
               "guides/accept-payments-with-stripe",
               "guides/record-offline-payments",
               {

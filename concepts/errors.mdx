@@ -90,10 +90,11 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | `403`  | The `x-api-key` header is missing or the key isn't recognised — rejected at the edge, before any scope check runs — or the key is valid but its `projectScope` does not allow the `{projectId}` in the URL, or it lacks the capability the route needs. On an end-user route, also: the signed-in person isn't an `ACTIVE` member of the project holding the route's permission. On the supplier plane, the `code` names which: `NOT_A_MEMBER`, `MEMBERSHIP_INACTIVE` or `NO_SUPPLIER_ROLE`. |
 | `404`  | The resource you targeted doesn't exist (or has been soft-deleted). On the supplier plane, also: the signed-in person has no supplier record to act on (`NO_SUPPLIER_ROLE` or `SUPPLIER_NOT_LINKED`). |
 | `409`  | Version conflict on an optimistic update, the supplier's time is already booked or held, capacity exceeded, duplicate registration, a credit that can't be booked (used up, expired, or on a cancelled order), or a card payment already in progress on the order. |
+| `410`  | A client's quote ran out before it was confirmed (`QUOTE_EXPIRED`). Ask for a new quote. |
 | `413`  | The request body is too large — on the site-events routes, more than 256 KB per batch or 64 KB per beacon. Nothing was read. |
 | `422`  | The request is well-formed but asks for something the data cannot support: a package plan that no availability can fill, a line the service is not sold as, a service or offering that is no longer sold, a booking whose status no longer allows the change, or a credit treatment for a booking with no credit. Nothing was written. |
-| `429`  | Too many requests from this key. Today only the site-events routes rate-limit. Retry after the `Retry-After` header. |
-| `503`  | A dependency was down and nothing was recorded. Retry after the `Retry-After` header. |
+| `429`  | Too many requests: the site-events routes' rate limit (retry after the `Retry-After` header), or a client-plane daily cap such as `PACKAGE_QUOTE_LIMIT` or `FAMILY_INVITE_LIMIT`. |
+| `503`  | A dependency was down and nothing was recorded, or a card charge got no clear answer (`CHARGE_OUTCOME_UNKNOWN`). Retry after the `Retry-After` header. |
 | `5xx`  | Something went wrong on our side. Safe to retry idempotent requests with backoff.                  |
 
 ## Common error codes
@@ -118,14 +119,14 @@ A **hold-lifecycle** failure (`409`, see the table below) is the plain envelope:
 | `NOT_FOUND`                             | 404    | Resource doesn't exist or has been soft-deleted. Also returned for a `clientId` or `supplierId` in the request body that belongs to a different project — never a `403`, so a foreign id is indistinguishable from a missing one. |
 | `UNRESOLVED_SUBDIVISION`                | 400    | The address `state` isn't a recognised ISO 3166-2 subdivision of its country, and the offering or package prices by state or postal code there. `message` names the value and the subdivisions configured. Send the ISO code. See [Regional pricing](/concepts/regional-pricing#country-and-state-codes). |
 | `INVALID_ORDER_ITEM_REFERENCE`          | 400    | `POST .../bookings`: the service line's `orderItemId` isn't an item of its `orderId`. Check both ids. |
-| `REVIEW_ALREADY_EXISTS`                 | 409    | `POST .../bookings/{bookingId}/reviews`: the booking already has a review in that direction. Don't retry. |
+| `REVIEW_ALREADY_EXISTS`                 | 409    | `POST .../bookings/{bookingId}/reviews` or the client-plane `POST .../clients/me/bookings/{bookingId}/reviews`: the booking already has a review in that direction, through either route. Don't retry. |
 | `INVALID_CURSOR`                        | 400    | `GET .../suppliers/me/alerts` only: the `cursor` isn't one this list issued, or came from another `filter`. Request the first page again without it. See [Supplier portal: insights and alerts](/guides/supplier-portal-insights-and-alerts#alerts). |
 | `VERSION_CONFLICT`                      | 409    | Concurrent modification — re-read the resource and try again. Also a stale `version` on a supplier's schedule, blocked time or travel zone, or another write landing on one during its `DELETE`. |
 | `CONFLICT`                              | 409    | Generic write conflict covering situations like a booking that's already at capacity, or a client that's already registered as a participant on it (see [Group bookings and check-in](/guides/group-bookings-and-check-in#register-a-participant)). Also an `ACTIVE` schedule that overlaps another `ACTIVE` one, and `DELETE .../suppliers/{supplierId}` when the supplier's sign-in changed during the delete — try again. Also a supplier photo confirmed or removed by another request while yours was saved, and `PUT .../suppliers/{supplierId}` when `active` changed between the update's read and its write: read the supplier again and retry. `message` names the specific problem. |
 | `SLOT_BOOKED`                           | 409    | The supplier's time is already taken by a confirmed booking. `conflicts[]` names the `bookingId`. Not retryable — search availability again. |
 | `SLOT_HELD`                             | 409    | The supplier's time is claimed by a live hold — often **your own**. `conflicts[]` names the `reservationId`; convert it instead of booking directly. See [Hold slots during checkout](/guides/hold-slots-for-checkout#handling-a-held-slot). |
 | `OCCUPANCY_CONTENTION`                  | 409    | Too many concurrent writes on one supplier's day; the internal retry gave up. **Retryable** — resend after a short backoff. On `POST .../holds/{reservationId}/release`, the hold is still `HELD` (it still expires on its own): retry the release. |
-| `PAYMENT_IN_FLIGHT`                     | 409    | `POST .../orders/{orderId}/payment-intent` while a card payment on the order is already in progress (processing, or a saved-card charge). One open intent per order: "A card payment on order ord_… is already in progress. Wait for it to finish, then read the order's transactions." Don't open another intent. Re-read the order's transactions. See [Accept payments with Stripe](/guides/accept-payments-with-stripe). |
+| `PAYMENT_IN_FLIGHT`                     | 409    | Also confirming a client's quote while its payment is in progress. `POST .../orders/{orderId}/payment-intent` while a card payment on the order is already in progress (processing, or a saved-card charge). One open intent per order: "A card payment on order ord_… is already in progress. Wait for it to finish, then read the order's transactions." Don't open another intent. Re-read the order's transactions. See [Accept payments with Stripe](/guides/accept-payments-with-stripe). |
 | `ORDER_NOT_DELETABLE`                   | 409    | `DELETE .../orders/{orderId}` on an order that holds a booking (booked or delivered) or a `PENDING` or `SUCCEEDED` payment or refund. `message` gives the counts. Nothing changed. Cancel the order with `POST .../orders/{orderId}/status` instead. See [Orders](/resources/orders#the-order-lifecycle). |
 | `OFFERING_NOT_PRICED`                   | 422    | The offering has no `DEFAULT` price rule, so nothing can be priced: "Offering has no DEFAULT price rule". Any write that prices it can return this: order create, adding an order item, booking create, hold convert and package bookings. The business adds a `DEFAULT` rule. Don't retry. |
 | `NOT_A_PACKAGE_SERVICE`                 | 400    | `POST .../orders/{orderId}/package-bookings`, its client-plane twin, or converting a hold against a `PACKAGE` item, when the item's service has no active `PACKAGE` business model: "Service srv_… has no active PACKAGE business model". The business turns one on. See [Packages](/resources/packages). |
@@ -237,6 +238,67 @@ attendance report. Full walkthrough in
 | `REPORT_ALREADY_EXISTS`          | 409    | A different attendance answer is already on file.                               | Show the answer on file. Don't retry.                        |
 | `BOOKING_ALREADY_SETTLED`        | 409    | The booking is already settled.                                                 | Don't retry.                                                 |
 | `BOOKING_NOT_REPORTABLE`         | 422    | The booking is cancelled or hasn't ended yet, or (a `SUPPLIER` report) is already settled. Also answered by `POST .../bookings/{bookingId}/reports` with your key. Nothing was written. | Report after the booking ends. Don't retry a settled one. |
+
+## Client-plane codes
+
+These come from the routes a signed-in client calls under `/clients/me`. A
+client moving or cancelling their own booking also gets the
+[supplier booking codes](#supplier-booking-codes) above:
+`PARTICIPANT_ACTION_DISABLED`, `BOOKING_NOT_SCHEDULED`, `NOTICE_WINDOW_PASSED`,
+`NEW_START_INSIDE_NOTICE_WINDOW`, `SLOT_UNAVAILABLE` and `SLOT_UNVERIFIABLE`.
+
+### Bookings, cancels and reviews
+
+Full walkthrough in [Let clients manage their own bookings](/guides/client-self-service).
+
+| `code` | Status | What it means | What to do |
+| --- | --- | --- | --- |
+| `LATE_CANCEL_NOT_ALLOWED` | 409 | The cancel is inside the business's cancellation notice, and the service refuses late cancels. | Don't retry. The client contacts the business. |
+| `LATE_CANCEL_NOT_ACCEPTED` | 409 | The cancel is late and uses up the package session, and the body didn't accept that. | Show the client the outcome, then send `acceptLateCancel: true` if they agree. |
+| `BOOKING_NOT_REVIEWABLE` | 422 | The booking hasn't ended, was cancelled, didn't take place or has no supplier. | Offer the review only once the booking has ended. |
+
+### Quotes and payment
+
+Full walkthrough in [Book and pay with a quote](/guides/book-with-a-quote).
+
+| `code` | Status | What it means | What to do |
+| --- | --- | --- | --- |
+| `INSIDE_BOOKING_NOTICE` | 422 | The start is closer than the business's minimum booking notice. Also an explicit session on the client's package booking. | Pick a later start. |
+| `SESSION_LENGTH_NOT_OFFERED` | 422 | An explicit session on the client's package booking isn't the offering's length. | Send the offering's own length, or book from a slate. |
+| `TOO_MANY_OPEN_QUOTES` | 409 | The client already holds 3 open quotes. | Confirm one, or let one go. |
+| `PACKAGE_QUOTE_LIMIT` | 429 | More than 10 package quotes for this client today (UTC). | Try again tomorrow. |
+| `PAYMENT_OPTION_UNAVAILABLE` | 422 | A `payWith` the business doesn't offer for this booking or package. | Send one of the quote's `paymentChoices`, or leave `payWith` out. |
+| `ADDRESS_NOT_LOCATED` | 422 | A `TRAVEL_ZONE` address has no map position. | Save the address again with its coordinates. |
+| `QUOTE_CHANGED` | 409 | The price changed since the quote. Nothing was booked. The body carries the new `quote`. | Show the new price, and confirm again only if the client agrees. |
+| `QUOTE_EXPIRED` | 410 | The quote ran out before it was confirmed, or a payment by link missed `payBy`. | Ask for a new quote. |
+| `QUOTE_CANCELLED` | 409 | The quote was let go. | Ask for a new quote. |
+| `QUOTE_IN_PROGRESS` | 409 | Another confirm of this quote is running. | Wait, then read the quote. |
+| `QUOTE_ALREADY_CONFIRMED` | 409 | You tried to let go of a quote that is already booked. | Cancel the booking instead. |
+| `QUOTE_AWAITING_PAYMENT` | 409 | You tried to let go of a quote waiting for its payment by link. | It keeps its time until `payBy`. |
+| `QUOTE_NOT_BOOKED` | 409 | The quote was paid after its time was taken. The business is told to refund it. | Don't pay again. Ask for a new quote for another time. |
+| `ONLINE_PAYMENT_NOT_AVAILABLE` | 409 | The business isn't set up to take card payments. | Pay later instead. |
+| `CARD_NOT_AVAILABLE` | 409 | The saved card isn't the client's, or can't be used here. | Ask for a new quote with another card. |
+| `CARD_DECLINED` | 422 | The card was declined. Nothing was booked; the quote was let go. | Ask for a new quote with another card. |
+| `CARD_NEEDS_CONFIRMATION` | 409 | The client's bank must confirm the payment. Nothing was booked; the quote was let go. | Ask for a new quote with another card, or pay by link. |
+| `CARD_PAYMENT_REFUSED` | 409 | The payment was refused outright. Nothing was charged. | Ask for a new quote with another card. |
+| `CHARGE_OUTCOME_UNKNOWN` | 503 | The card network gave no clear answer; the card may have been charged. | Confirm again after `Retry-After`. It won't charge twice. |
+| `CHARGED_NOT_BOOKED` | 409 | The card was, or may have been, charged, and the time couldn't be booked. The business has been told. | **Don't pay again or ask for a new quote.** Follow the `message`. |
+
+### Family members
+
+Full walkthrough in [Book for a family member](/guides/book-for-a-family-member).
+
+| `code` | Status | What it means | What to do |
+| --- | --- | --- | --- |
+| `ATTENDEE_NOT_ALLOWED` | 422 | `attendeeClientId` isn't the client or one of their family members. Also on `POST /bookings`, `POST /orders/{orderId}/package-bookings` and hold conversion. | Pass a `clientId` from `GET /clients/me/dependants`. |
+| `DEPENDANT_TOO_YOUNG` | 409, 422 | `409`: a signed-in family member under 16 books, cancels or reschedules. `422`: inviting a family member under 12, or with no date of birth. | Their guardian does it. |
+| `GUARDIAN_PAYS` | 422 | A signed-in family member asked to pay now or by card. | Quote again with `payWith: "LATER"`. |
+| `GUARDIAN_MUST_BOOK` | 422 | A signed-in family member, where the business takes payment when booking. | Their guardian books it. |
+| `DEPENDANT_NOT_ADULT` | 422 | Releasing a family member, or taking over your own profile, before 18 or with no date of birth. | Wait until they're 18. |
+| `DEPENDANT_HAS_NO_EMAIL` | 409 | Releasing a family member who has no email of their own yet. | Invite them to a sign-in first. |
+| `CLIENT_IS_DEPENDANT` | 409 | A signed-in family member tried to add family, or invite someone. | Only a guardian manages family. |
+| `CLIENT_ALREADY_LINKED` | 409 | The family member already has a sign-in. | Nothing to send. |
+| `FAMILY_LIMIT` | 409 | The client already has 50 family members. | Remove one first. |
 
 ## Validation errors
 

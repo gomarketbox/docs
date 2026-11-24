@@ -221,7 +221,10 @@ with, and see on, bookings of that service. You read them on
   "client": {
     "canRescheduleBookings": true,
     "rescheduleNoticeHours": 24,
-    "participantDisplay": "FULL"
+    "participantDisplay": "FULL",
+    "canCancelBookings": true,
+    "cancelNoticeHours": 0,
+    "lateCancel": "FORFEIT"
   }
 }
 ```
@@ -232,15 +235,25 @@ with, and see on, bookings of that service. You read them on
 | `supplier.canRescheduleBookings`, `supplier.rescheduleNoticeHours` | The same, for moving a booking to another time with the same supplier. |
 | `supplier.canSeeClientLastName` | When `false`, suppliers see the client's first name and last initial only. |
 | `supplier.canSeeClientEmail`, `supplier.canSeeClientPhone` | Whether suppliers see the client's email and phone. |
-| `client.canRescheduleBookings`, `client.rescheduleNoticeHours` | Whether clients may move their own upcoming sessions. Clients can't cancel. |
+| `client.canRescheduleBookings`, `client.rescheduleNoticeHours` | Whether clients may move their own upcoming sessions, and until how many hours before the start. |
+| `client.canCancelBookings`, `client.cancelNoticeHours` | Whether clients may cancel their own upcoming sessions, and until how many hours before the start. Unset, clients can't cancel, and the notice is `0`. |
+| `client.lateCancel` | What a client cancel inside the project's cancellation notice does: `FORFEIT` cancels and uses up the package session, `REFUSE` doesn't allow it. Unset means `FORFEIT`. |
 | `client.participantDisplay` | How other participants are named to clients on their own bookings: `FULL`, `FIRST_NAME` or `HIDDEN` (a count only). |
 
 **It is replaced whole on `PUT`.** Send every field, or omit
-`participantSettings` to leave the settings unchanged. The one exception is
-`client.participantDisplay`: omitted, it keeps its stored value.
+`participantSettings` to leave the settings unchanged. The exceptions are
+`client.participantDisplay`, `client.canCancelBookings`,
+`client.cancelNoticeHours` and `client.lateCancel`: omitted, each keeps its
+stored value.
+
+A client cancel inside the project's cancellation notice is a **late cancel**.
+The cancel quote says whether a cancel would be late before the client
+commits. See
+[Let clients manage their own bookings](/guides/client-self-service#cancel-a-booking).
 
 The settings bind suppliers and clients acting for themselves — for example on
 the [supplier plane](/guides/supplier-portal-bookings#cancel-and-reschedule),
+or the [client plane](/guides/client-self-service),
 where a disabled action is `403 PARTICIPANT_ACTION_DISABLED` and a passed
 notice window is `409 NOTICE_WINDOW_PASSED`. Your API-key calls act for the
 business, and the settings don't restrict them.

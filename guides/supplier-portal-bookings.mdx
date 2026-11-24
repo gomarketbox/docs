@@ -35,6 +35,9 @@ This section is the summary. For the agenda's window and `expand` rules,
 
    The list isn't paginated, so keep the window short — a day or a week. Every
    `expand` value except `client` needs both dates, at most 93 days apart.
+   With `expand=client`, a booking a client made for a family member also
+   carries `attendee.displayName`: the person who attends, named as the
+   service's participant settings allow. Show it beside the client's name.
 2. Read `viewerActions` on each row: `canCancel`, `canReschedule`, and
    `blockedReason` when an action is blocked. The server computes them; use them
    to show or hide the cancel and move buttons.

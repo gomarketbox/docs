@@ -1,0 +1,286 @@
+---
+title: Let clients manage their own bookings
+description: On the client plane, a signed-in client lists their bookings and orders, moves a booking, cancels one after reading what the cancel will do, and rates the supplier, under the business's own rules.
+---
+
+A signed-in client can look after their own bookings through the **client
+plane**. Your BFF sends your API key and the client's access token, and
+MarketBox works out who the client is from the token. These routes check
+everything your server used to check by hand:
+
+- the booking or order is the client's;
+- the service lets clients reschedule or cancel;
+- the notice windows and the business's late-cancel rule.
+
+A booking or order that isn't the client's answers `404`, the same as one that
+doesn't exist. Your BFF never needs a `clientId` from the browser.
+
+This guide assumes hosted sign-in and the
+[BFF pattern](/guides/booking-flow-auth#the-bff-pattern) are working, and that
+the client is onboarded with `POST /clients/me`. To book new time, see
+[Book and pay with a quote](/guides/book-with-a-quote). To book for a child,
+see [Book for a family member](/guides/book-for-a-family-member).
+
+## The routes at a glance
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | `/clients/me` | The client's profile and saved addresses. Writes nothing. |
+| `GET` | `/clients/me/bookings` | The client's bookings in a window, each with `viewerActions`. |
+| `GET` | `/clients/me/bookings/{bookingId}` | One booking, with its service lines and participants. |
+| `PATCH` | `/clients/me/bookings/{bookingId}` | Move the booking to another start time. |
+| `GET` | `/clients/me/bookings/{bookingId}/cancel-quote` | What a cancel would do now. Writes nothing. |
+| `POST` | `/clients/me/bookings/{bookingId}/cancel` | Cancel the booking. |
+| `POST` | `/clients/me/bookings/{bookingId}/reviews` | Rate the supplier of a booking that has ended. |
+| `GET` | `/clients/me/orders` | The client's orders, newest first. Paginated. |
+| `GET` | `/clients/me/orders/{orderId}` | One order, with its lines and what is still due. |
+
+Each path is relative to the project: `GET /clients/me/bookings` is
+`GET /v1/projects/{projectId}/clients/me/bookings`. Every route takes both
+credentials: `x-api-key` from your server, and `Authorization: Bearer` with the
+client's access token.
+
+Onboard the client with `POST /clients/me` first. Before that, a new person
+has no membership of the project and gets `403 FORBIDDEN`. A member with no
+client profile here, such as staff, gets `404`.
+
+## Read the profile
+
+`GET /clients/me` returns the client's own profile: name, email, phone,
+`defaultLocale`, `invitationStatus`, `defaultAddressId` and `addresses[]`. It
+writes nothing.
+
+It returns less than `POST /clients/me` does. Business-only fields are left
+out, and so is `lastPayment`. To show the card the client last paid with, keep
+calling `POST /clients/me`, or list their saved cards with
+`GET /clients/me/payment-methods`. See
+[Pay with a saved card](/guides/book-with-a-quote#pay-with-a-saved-card).
+
+## List bookings
+
+`GET /clients/me/bookings` returns every booking of the client whose start is
+in the window, in one response. It isn't paginated, so keep the window short.
+
+```bash
+curl "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/clients/me/bookings?startDate=2026-12-01T00:00:00Z&endDate=2026-12-31T23:59:59Z&status=SCHEDULED&expand=services,location" \
+  -H "x-api-key: $MARKETBOX_API_KEY" \
+  -H "Authorization: Bearer <accessToken>"
+```
+
+| Parameter | What it does |
+| --- | --- |
+| `startDate`, `endDate` | The window, as UTC instants. Both are required with any `expand` value except `client`, at most 93 days apart. |
+| `status` | Only bookings in this status. |
+| `expand` | Any of `client`, `services`, `package`, `location`, `participants`, `myReport`, comma-separated. Each adds one key to every row. An unknown value is `400`. |
+
+With `participants`, a group booking shows only the client's own row. A
+private booking shows every participant the client registered.
+
+### Show only the actions that are allowed
+
+Each row carries `viewerActions`:
+
+```json
+"viewerActions": {
+  "canCancel": true,
+  "canReschedule": false,
+  "blockedReason": "Rescheduling closes 24 h before the session."
+}
+```
+
+`canCancel` and `canReschedule` follow the service's
+[participant settings](/concepts/booking-engine-model#participant-settings) and
+the server's clock. Show the **Cancel** and **Reschedule** buttons only when
+they are `true`. When a notice window has closed one of them,
+`blockedReason` says so in a sentence you can show the client. It is absent
+otherwise.
+
+`canCancel: true` doesn't promise a free cancel. A cancel inside the
+business's cancellation notice may still be refused, or may use up a package
+session. Ask the [cancel quote](#cancel-a-booking) before you cancel.
+
+### One booking
+
+`GET /clients/me/bookings/{bookingId}` returns the booking as the client sees
+it: the row with `viewerActions`, its service lines and its participants. It
+carries no notes and no supplier report. On a group booking, the client sees
+only their own participant row.
+
+## Move a booking
+
+`PATCH /clients/me/bookings/{bookingId}` moves the booking to a new start. It
+keeps the length, the supplier, the location and the zone.
+
+```json
+// PATCH /v1/projects/{projectId}/clients/me/bookings/{bookingId}
+{
+  "startTime": "2026-12-09T22:30:00.000Z"
+}
+```
+
+Find the new start with the availability search for the booking's service and
+supplier. See [Availability](/resources/availability). The client and the
+business are emailed.
+
+The move is refused when any of these is true:
+
+| Situation | Status and `code` |
+| --- | --- |
+| The service doesn't let clients reschedule. | `403 PARTICIPANT_ACTION_DISABLED` |
+| The booking isn't `SCHEDULED`. | `409 BOOKING_NOT_SCHEDULED` |
+| The booking is already inside the reschedule notice window. | `409 NOTICE_WINDOW_PASSED` |
+| The new start is inside the notice window. | `422 NEW_START_INSIDE_NOTICE_WINDOW` |
+| The new time isn't free, is outside the supplier's hours or is blocked. | `409 SLOT_UNAVAILABLE` |
+| The new time couldn't be checked. | `409 SLOT_UNVERIFIABLE` |
+| The supplier's calendar is busy with other writes. | `409 OCCUPANCY_CONTENTION`. Retry. |
+
+## Cancel a booking
+
+A client cancel takes two calls. First ask what the cancel would do, show that
+to the client, and cancel only once they agree.
+
+### 1. Ask for the cancel quote
+
+`GET /clients/me/bookings/{bookingId}/cancel-quote` writes nothing:
+
+```json
+{
+  "data": {
+    "allowed": true,
+    "refusal": null,
+    "late": true,
+    "lateNoticeHours": 24,
+    "sessionReturned": false,
+    "requiresAcceptLateCancel": true,
+    "refund": "NONE"
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `allowed` | Whether the client may cancel online now. When `false`, `refusal.code` and `refusal.message` say why, in words you can show the client. |
+| `late` | The cancel is inside the business's cancellation notice, `lateNoticeHours` before the start. |
+| `sessionReturned` | Whether a package session goes back on the client's package. `null` when the booking isn't from a package. |
+| `requiresAcceptLateCancel` | The cancel must carry `acceptLateCancel: true`, because the session is used up. |
+| `refund` | Always `NONE`. A client cancel never refunds money. |
+
+A refusal is answered here as `allowed: false`, not as an error. Its `code` is
+one of `PARTICIPANT_ACTION_DISABLED`, `BOOKING_NOT_SCHEDULED`,
+`NOTICE_WINDOW_PASSED` or `LATE_CANCEL_NOT_ALLOWED`.
+
+### 2. Cancel
+
+```json
+// POST /v1/projects/{projectId}/clients/me/bookings/{bookingId}/cancel
+{
+  "reasonCode": "CLIENT_UNWELL",
+  "note": "Away that week.",
+  "acceptLateCancel": true
+}
+```
+
+All three fields are optional. `reasonCode` is `CLIENT_REQUESTED` (the
+default), `CLIENT_UNWELL` or `OTHER`. `note`, up to 1000 characters, stays on
+the booking's history and is never emailed.
+
+The server decides what happens to the session; the body can't choose:
+
+- **Outside the cancellation notice**, a package session goes back on the
+  package.
+- **Inside it**, the service's `client.lateCancel` setting decides. `FORFEIT`
+  cancels and uses up the session, but only with `acceptLateCancel: true`.
+  `REFUSE` doesn't let the client cancel at all.
+
+Without `acceptLateCancel: true`, a late cancel that uses up a session is
+refused:
+
+```json
+{
+  "code": "LATE_CANCEL_NOT_ACCEPTED",
+  "message": "This booking starts within 24 h, so cancelling it now uses up the session: it does not go back on the package. Send acceptLateCancel: true to cancel anyway.",
+  "statusCode": 409,
+  "requestId": "c3e8a1d4-7b2f-4a96-9e05-1f6d8b3c2a74"
+}
+```
+
+Other refusals:
+
+| Situation | Status and `code` |
+| --- | --- |
+| The service doesn't let clients cancel. This is off unless the business turns it on. | `403 PARTICIPANT_ACTION_DISABLED` |
+| The booking isn't `SCHEDULED`. | `409 BOOKING_NOT_SCHEDULED` |
+| The service's own client cancel notice, `client.cancelNoticeHours`, has passed. | `409 NOTICE_WINDOW_PASSED` |
+| The cancel is late and the service refuses late cancels. | `409 LATE_CANCEL_NOT_ALLOWED` |
+| The booking changed since it was read. | `409 VERSION_CONFLICT` |
+
+**No money moves.** For a booking paid by card, MarketBox alerts the business,
+which decides whether to refund it. The client and the business are emailed.
+
+## Rate the supplier
+
+`POST /clients/me/bookings/{bookingId}/reviews` rates the supplier who served
+the booking:
+
+```json
+// POST /v1/projects/{projectId}/clients/me/bookings/{bookingId}/reviews
+{
+  "ratingStars": 5,
+  "reviewText": "Turned up on time and was a pleasure to work with."
+}
+```
+
+The rules are the same as for the review link MarketBox emails after a
+booking:
+
+- The booking must have ended. It doesn't have to be `COMPLETED`.
+- A booking that was cancelled, didn't take place or has no supplier is
+  `422 BOOKING_NOT_REVIEWABLE`.
+- A booking is reviewed once, through either route. A second review is
+  `409 REVIEW_ALREADY_EXISTS`.
+
+The rating counts towards the supplier's average at once. It can't be edited
+or withdrawn, so confirm it with the client before you send it. See
+[Collect reviews and show ratings](/guides/collect-reviews-and-show-ratings).
+
+## List orders
+
+`GET /clients/me/orders` lists the client's orders, newest first, in every
+status. Page through it with `limit` and `cursor`. See
+[Pagination](/concepts/pagination).
+
+`GET /clients/me/orders/{orderId}` returns one order with every line. Each line
+has its label and quantity, and a package line has the sessions left. The money
+summary has the lines, service fees, tax, total, what is paid and what is still
+due.
+
+Both are the client's view of an order. They leave out staff, attribution and
+pricing-rule details.
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | Auth | Description |
+| --- | --- | --- | --- |
+| `/v1/projects/{projectId}/clients/me` | `GET` | `x-api-key` + `Bearer` | The client's own profile. `404` before onboarding. |
+| `/v1/projects/{projectId}/clients/me/bookings` | `GET` | `x-api-key` + `Bearer` | The client's bookings in a window, with `viewerActions`. |
+| `/v1/projects/{projectId}/clients/me/bookings/{bookingId}` | `GET` | `x-api-key` + `Bearer` | One of the client's bookings. |
+| `/v1/projects/{projectId}/clients/me/bookings/{bookingId}` | `PATCH` | `x-api-key` + `Bearer` | Move the booking to a new `startTime`. |
+| `/v1/projects/{projectId}/clients/me/bookings/{bookingId}/cancel-quote` | `GET` | `x-api-key` + `Bearer` | What a cancel would do now. |
+| `/v1/projects/{projectId}/clients/me/bookings/{bookingId}/cancel` | `POST` | `x-api-key` + `Bearer` | Cancel the booking. |
+| `/v1/projects/{projectId}/clients/me/bookings/{bookingId}/reviews` | `POST` | `x-api-key` + `Bearer` | Rate the supplier. |
+| `/v1/projects/{projectId}/clients/me/orders` | `GET` | `x-api-key` + `Bearer` | The client's orders. |
+| `/v1/projects/{projectId}/clients/me/orders/{orderId}` | `GET` | `x-api-key` + `Bearer` | One of the client's orders. |
+
+### Errors and edge cases
+
+| Scenario | `code` | Status | Resolution |
+| --- | --- | --- | --- |
+| The person hasn't onboarded in this project | `FORBIDDEN` | `403` | Call `POST /clients/me` first. A member with no client profile gets `404`. |
+| The booking or order isn't the client's, or doesn't exist | `NOT_FOUND` | `404` | Show "not found". The two cases look the same on purpose. |
+| An unknown `expand` value, or `expand` without a window of 93 days or less | — | `400` | Send `startDate` and `endDate`, at most 93 days apart. |
+| A signed-in family member under 16 cancels or moves a booking | `DEPENDANT_TOO_YOUNG` | `409` | Their guardian does it. See [Book for a family member](/guides/book-for-a-family-member). |
+| No user token, or an expired one | `HTTP_ERROR` | `401` | Sign the client in again. |
+
+See [Errors](/concepts/errors) for the envelope.

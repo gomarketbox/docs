@@ -292,7 +292,11 @@ the booking.
 services in one transaction. Every booking draws on an order item, so create
 the order first. The body carries:
 
-- **`clientId`** — who is served. Required.
+- **`clientId`** — who is served, and pays. Required.
+- **`attendeeClientId`** — who attends, when it isn't the client: one of the
+  client's family members. Optional. Anyone else is
+  `422 ATTENDEE_NOT_ALLOWED`. The booking carries it back. See
+  [Book for a family member](/guides/book-for-a-family-member).
 - **`supplierId`** — who serves. Optional: omit it to create an unassigned
   booking.
 - **`bookingStartUtc`**, **`bookingEndUtc`**, **`bookingTz`** — when. Required.

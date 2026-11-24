@@ -9,9 +9,17 @@ This guide covers both halves of ratings:
 - **Show a rating**: a star badge, a supplier profile, and the full list of
   a supplier's reviews.
 
-Every call here uses the API key, so it runs on your server. There is no
-client-plane or supplier-plane route for reviews. Your server decides who may
-rate which booking, and the API doesn't check it for you.
+Every call here uses the API key, so it runs on your server. Your server
+decides who may rate which booking, and the API doesn't check it for you.
+
+<Tip>
+**A signed-in client can rate on the client plane instead.**
+`POST /clients/me/bookings/{bookingId}/reviews` takes `ratingStars` and an
+optional `reviewText`. MarketBox checks the booking is the client's and has
+ended, so you skip the ownership check below. See
+[Rate the supplier](/guides/client-self-service#rate-the-supplier). There is no
+supplier-plane route for reviews.
+</Tip>
 
 For the fields and the attendance report, see
 [Reviews and reports](/resources/reviews).
