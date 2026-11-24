@@ -1,6 +1,6 @@
 ---
 title: Clients
-description: The person the service is for — the client profile, the routes a signed-in client calls on their own behalf, and the API-key routes that read a client's history.
+description: The person the service is for — the client profile, family members, the routes a signed-in client calls on their own behalf to book, pay, cancel and see their history, and the API-key routes that read a client's history.
 ---
 
 A **client** is the person a service is for. Every order and booking names
@@ -15,6 +15,8 @@ Clients are reached two ways, and the difference matters for security:
   key alone and names the client. They return whatever client you ask for in
   the project, so your server must check the client is the one signed in.
 
+To show a signed-in client their own bookings and orders, use the client plane.
+
 ## Which routes need which credentials
 
 Every path is relative to the project: `POST /clients/me` is
@@ -23,6 +25,7 @@ Every path is relative to the project: `POST /clients/me` is
 | Method | Path | Credentials | What it does |
 | --- | --- | --- | --- |
 | `POST` | `/clients/me` | API key + user token | Onboard the signed-in client, or return their profile. |
+| `GET` | `/clients/me` | API key + user token | Read the profile. Writes nothing. |
 | `PATCH` | `/clients/me` | API key + user token | Change `firstName`, `lastName` or `phone`. |
 | `POST` | `/clients/me/addresses` | API key + user token | Save an address. |
 | `PATCH` | `/clients/me/addresses/{addressId}` | API key + user token | Change a saved address. |
@@ -30,6 +33,20 @@ Every path is relative to the project: `POST /clients/me` is
 | `PUT` | `/clients/me/addresses/{addressId}/default` | API key + user token | Make a saved address the default. |
 | `GET` | `/clients/me/credits` | API key + user token | The client's package sessions left to book. |
 | `POST` | `/clients/me/orders/{orderId}/package-bookings` | API key + user token | Book the client's own package sessions. |
+| `GET` | `/clients/me/bookings`, `/clients/me/bookings/{bookingId}` | API key + user token | The client's own bookings. See [Let clients manage their own bookings](/guides/client-self-service). |
+| `PATCH` | `/clients/me/bookings/{bookingId}` | API key + user token | Move the client's booking to another time. |
+| `GET` | `/clients/me/bookings/{bookingId}/cancel-quote` | API key + user token | What cancelling the booking would do now. |
+| `POST` | `/clients/me/bookings/{bookingId}/cancel` | API key + user token | Cancel the client's booking. |
+| `POST` | `/clients/me/bookings/{bookingId}/reviews` | API key + user token | Rate the supplier of a booking that has ended. |
+| `GET` | `/clients/me/orders`, `/clients/me/orders/{orderId}` | API key + user token | The client's own orders. |
+| `POST` | `/clients/me/booking-quotes`, `/clients/me/package-quotes` | API key + user token | Hold and price a booking, or price a package. See [Book and pay with a quote](/guides/book-with-a-quote). |
+| `GET`, `DELETE` | `/clients/me/quotes/{quoteId}` | API key + user token | Read a quote, or let it go. |
+| `POST` | `/clients/me/quotes/{quoteId}/confirm` | API key + user token | Book or buy what the quote states. |
+| `GET` | `/clients/me/payment-methods` | API key + user token | The client's saved cards with this business. |
+| `GET`, `POST` | `/clients/me/dependants` | API key + user token | List or add family members. See [Book for a family member](/guides/book-for-a-family-member). |
+| `PATCH`, `DELETE` | `/clients/me/dependants/{dependantId}` | API key + user token | Edit or remove a family member. |
+| `POST` | `/clients/me/dependants/{dependantId}/invite`, `…/release` | API key + user token | Invite a family member to their own sign-in, or hand an adult their profile. |
+| `GET`, `DELETE` | `/clients/me/guardian` | API key + user token | For a signed-in family member: who manages their profile, or take it over. |
 | `GET` | `/clients/{clientId}/bookings` | API key | The client's bookings. |
 | `GET` | `/clients/{clientId}/orders` | API key | The client's orders. |
 | `GET` | `/clients/{clientId}/reviews` | API key | The reviews suppliers wrote **about** the client. See [Reviews](/resources/reviews). |
@@ -67,6 +84,7 @@ The client plane returns the client's profile in `data`:
 | `defaultAddressId` | The default address. It prices orders that name no place of their own. Absent when there is none. |
 | `lastPayment` | A display-only snapshot of the card the client last paid with. See [Show the card a client last paid with](/guides/accept-payments-with-stripe#show-the-card-a-client-last-paid-with). |
 | `defaultLocale` | The language of the client's latest booking, as BCP-47. Every booking whose order carried a `locale` overwrites it. |
+| `familyCount` | How many family members the client manages. Absent when they never had any. See [Book for a family member](/guides/book-for-a-family-member). |
 | `active` | Whether the client is active in this project. |
 | `createdAt`, `updatedAt` | Audit fields. |
 
@@ -87,8 +105,10 @@ supplier, becomes a client too. Onboarding adds the `CLIENT` role to their
 membership and keeps their other roles. The response is the same as for
 anyone else.
 
-There is no `GET /clients/me`. To read the profile, call `POST /clients/me`
-with no body. It writes nothing and returns the profile.
+To read the profile after onboarding, call `GET /clients/me`. It writes
+nothing, and leaves out `lastPayment` and the business-only fields.
+`POST /clients/me` with no body also writes nothing, and returns the full
+profile.
 
 The body is optional. Send `firstName`, `lastName` and `phone` to record what
 your checkout collected:
@@ -199,6 +219,14 @@ The client books from a listed credit with
 
 - Another client's order, or one that doesn't exist, is `404 NOT_FOUND`,
   `Order ord_… not found`.
+- An explicit session in `sessions` is checked as a booking quote is. It must
+  be at least the business's minimum booking notice away
+  (`422 INSIDE_BOOKING_NOTICE`), exactly the offering's length
+  (`422 SESSION_LENGTH_NOT_OFFERED`), and fit the supplier's schedule for the
+  service, outside their booked and blocked time and inside their travel area
+  (`409 SLOT_UNAVAILABLE`).
+- `attendeeClientId` books the sessions for one of the client's family
+  members. See [Book for a family member](/guides/book-for-a-family-member).
 - A credit the credits list wouldn't show is a `409`. That covers an unpaid
   order and a used-up or expired package. A removed order item is a
   `404 NOT_FOUND` instead, and a cancelled order is `409 ORDER_CANCELLED`:
@@ -219,7 +247,11 @@ doesn't check payment. See
 
 ## A client's history
 
-`GET /clients/{clientId}/bookings` and `GET /clients/{clientId}/orders` take
+On the client plane, `GET /clients/me/bookings` and `GET /clients/me/orders`
+list the signed-in client's own. See
+[Show booking and order history](/guides/manage-a-client-account#show-booking-and-order-history).
+
+From your server, `GET /clients/{clientId}/bookings` and `GET /clients/{clientId}/orders` take
 the API key alone. Both are paginated with `limit` and `cursor`: see
 [Pagination](/concepts/pagination).
 
@@ -235,6 +267,7 @@ doesn't prove the id was right.
 ## Endpoint index
 
 - `POST /v1/projects/{projectId}/clients/me`
+- `GET  /v1/projects/{projectId}/clients/me`
 - `PATCH /v1/projects/{projectId}/clients/me`
 - `POST /v1/projects/{projectId}/clients/me/addresses`
 - `PATCH /v1/projects/{projectId}/clients/me/addresses/{addressId}`
@@ -242,6 +275,28 @@ doesn't prove the id was right.
 - `PUT  /v1/projects/{projectId}/clients/me/addresses/{addressId}/default`
 - `GET  /v1/projects/{projectId}/clients/me/credits`
 - `POST /v1/projects/{projectId}/clients/me/orders/{orderId}/package-bookings`
+- `GET  /v1/projects/{projectId}/clients/me/bookings`
+- `GET  /v1/projects/{projectId}/clients/me/bookings/{bookingId}`
+- `PATCH /v1/projects/{projectId}/clients/me/bookings/{bookingId}`
+- `GET  /v1/projects/{projectId}/clients/me/bookings/{bookingId}/cancel-quote`
+- `POST /v1/projects/{projectId}/clients/me/bookings/{bookingId}/cancel`
+- `POST /v1/projects/{projectId}/clients/me/bookings/{bookingId}/reviews`
+- `GET  /v1/projects/{projectId}/clients/me/orders`
+- `GET  /v1/projects/{projectId}/clients/me/orders/{orderId}`
+- `POST /v1/projects/{projectId}/clients/me/booking-quotes`
+- `POST /v1/projects/{projectId}/clients/me/package-quotes`
+- `GET  /v1/projects/{projectId}/clients/me/quotes/{quoteId}`
+- `DELETE /v1/projects/{projectId}/clients/me/quotes/{quoteId}`
+- `POST /v1/projects/{projectId}/clients/me/quotes/{quoteId}/confirm`
+- `GET  /v1/projects/{projectId}/clients/me/payment-methods`
+- `GET  /v1/projects/{projectId}/clients/me/dependants`
+- `POST /v1/projects/{projectId}/clients/me/dependants`
+- `PATCH /v1/projects/{projectId}/clients/me/dependants/{dependantId}`
+- `DELETE /v1/projects/{projectId}/clients/me/dependants/{dependantId}`
+- `POST /v1/projects/{projectId}/clients/me/dependants/{dependantId}/invite`
+- `POST /v1/projects/{projectId}/clients/me/dependants/{dependantId}/release`
+- `GET  /v1/projects/{projectId}/clients/me/guardian`
+- `DELETE /v1/projects/{projectId}/clients/me/guardian`
 - `GET  /v1/projects/{projectId}/clients/{clientId}/bookings`
 - `GET  /v1/projects/{projectId}/clients/{clientId}/orders`
 - `GET  /v1/projects/{projectId}/clients/{clientId}/reviews` — see [Reviews](/resources/reviews)

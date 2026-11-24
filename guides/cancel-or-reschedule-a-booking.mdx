@@ -14,25 +14,22 @@ the API key:
 None of these moves money. **The public API has no refund endpoint.** A
 refund is made by the business in the MarketBox dashboard.
 
-<Warning>
-**A client can't cancel or reschedule through the client plane.** There is no
-`/clients/me` route for it. If your client account page offers either, your
-server makes the change with the API key, and your server is the only thing
-checking that the booking is the client's. Resolve the client from their
-token with `POST /clients/me`, read the booking, and refuse when its
-`clientId` isn't theirs. See
-[Show booking and order history](/guides/manage-a-client-account#show-booking-and-order-history).
-</Warning>
+<Tip>
+**When a client asks for the change, let them make it on the client plane.**
+`PATCH /clients/me/bookings/{bookingId}` moves their own booking, and
+`POST /clients/me/bookings/{bookingId}/cancel` cancels it. MarketBox checks
+that the booking is theirs and applies the business's rules. See
+[Let clients manage their own bookings](/guides/client-self-service).
+</Tip>
 
 Your API key acts for the business. The service's
 [participant settings](/concepts/booking-engine-model#participant-settings)
-don't restrict it: no notice window, no "clients may not cancel". When a
-client asks for a change in your app, apply the business's rules yourself
-before you call. Read them from `participantSettings.client` on
-`GET /services/{serviceId}`. `canRescheduleBookings` and
-`rescheduleNoticeHours` say whether, and until when, a client may move a
-session. Clients can't cancel in MarketBox's own flows, so offering it is your
-business's decision.
+don't restrict it: no notice window, no "clients may not cancel". If your
+server makes a change for a client with the key, it is the only thing checking
+that the booking is the client's. Resolve the client from their token, read the
+booking, and refuse when its `clientId` isn't theirs. Apply the business's
+rules from `participantSettings.client` on `GET /services/{serviceId}`
+yourself.
 
 A supplier changes their own bookings through the
 [supplier plane](/guides/supplier-portal-bookings#cancel-and-reschedule), where

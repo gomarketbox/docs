@@ -3,6 +3,43 @@ title: "Changelog"
 description: "New features, updates, and fixes to the MarketBox API."
 ---
 
+<Update label="November 24, 2026" tags={["API"]}>
+
+## Clients book, pay, cancel and reschedule for themselves, and book for their family
+
+The client plane grows from onboarding and package credits into a full self-service account. A signed-in client can hold a time and see its exact price, then confirm it to book, paying later, by saved card or by a payment link. They can list and move their own bookings, cancel one after seeing what the cancel will do, rate the supplier, and see their orders. They can also keep a list of family members and book for them. Every rule is checked by MarketBox from the client's token: your server no longer has to check that a booking is the client's.
+
+**One behaviour change can refuse a request that used to succeed; the rest is additive.** No field was removed or renamed. Regenerate decoders for bookings, the client profile, services' `participantSettings` and supplier alerts.
+
+**Breaking**
+
+- **Explicit `sessions` on `POST …/clients/me/orders/{orderId}/package-bookings` are now checked like a quote.** A session closer than the business's minimum booking notice is `422 INSIDE_BOOKING_NOTICE`. One that isn't the offering's length is `422 SESSION_LENGTH_NOT_OFFERED`, for example "A session of this service lasts 60 minutes.". One that doesn't fit the supplier's schedule, or is booked, blocked or outside their travel area, is `409 SLOT_UNAVAILABLE`. Sessions from a planned slate already meet these rules. The API-key route `POST …/orders/{orderId}/package-bookings` isn't affected.
+
+**New**
+
+- **Booking quotes** — `POST …/clients/me/booking-quotes` holds a time for 10 minutes and prices it; `POST …/clients/me/quotes/{quoteId}/confirm` books it. Confirm is safe to repeat and re-checks the price (`409 QUOTE_CHANGED`, with the new quote). A client holds at most 3 open quotes. Quote ids start `qte_`.
+- **Paying for a quote** — `paymentStep` says how: nothing to pay, pay the business later, a saved card charged at confirm (`cardRef` from the new `GET …/clients/me/payment-methods`), or a payment link that holds the time for 15 minutes while the client pays with Stripe.js.
+- **Package quotes** — `POST …/clients/me/package-quotes` prices a package; confirming it buys it. Its sessions are bookable once the package is paid.
+- **The client's own bookings and orders** — `GET …/clients/me/bookings` (with `viewerActions`), `GET …/clients/me/bookings/{bookingId}`, `GET …/clients/me/orders` and `GET …/clients/me/orders/{orderId}`. A record that isn't the client's is `404`.
+- **Client reschedule and cancel** — `PATCH …/clients/me/bookings/{bookingId}` moves a booking. `GET …/clients/me/bookings/{bookingId}/cancel-quote` says what a cancel would do, and `POST …/clients/me/bookings/{bookingId}/cancel` does it. A late cancel that uses up a package session needs `acceptLateCancel: true`. A client cancel never refunds money.
+- **Client reviews** — `POST …/clients/me/bookings/{bookingId}/reviews` rates the supplier of a booking that has ended.
+- **`GET …/clients/me`** — read the profile without writing. It leaves out `lastPayment` and the business-only fields.
+- **Family members** — `…/clients/me/dependants` lists, adds, edits and removes the people a client books for, invites them to their own sign-in from 12, and releases them at 18. `…/clients/me/guardian` lets a signed-in family member see who manages their profile, and take it over at 18. `familyCount` on the client profile.
+- **`attendeeClientId`** — on `POST …/bookings`, `POST …/holds/{reservationId}/convert`, both package-bookings routes and booking quotes. The family member attends; the client pays. Anyone else is `422 ATTENDEE_NOT_ALLOWED`. Bookings carry it back, and the supplier plane shows the attendee as `attendee.displayName` with `expand=client`.
+- **Client cancel settings on services** — `participantSettings.client.canCancelBookings`, `cancelNoticeHours` and `lateCancel` (`FORFEIT` or `REFUSE`). Clients can't cancel unless the business turns it on. Omitted on update, each keeps its stored value.
+- **Supplier alerts** — `payload.paymentReason` adds `CLIENT_CANCELLED_PAID_BOOKING`, `CHARGED_WITHOUT_BOOKING` and `CHARGE_UNCONFIRMED`, and `payload.emailType` adds `BOOKING_NOT_COMPLETED`. Strict enum decoders need them.
+- **New error codes** — the quote, card and family-member codes listed in [Errors → Client-plane codes](/concepts/errors#client-plane-codes).
+
+**What this means for you**
+
+- **If your BFF cancels or moves bookings for clients with the API key, switch to the client-plane routes.** They check the booking is the client's and apply the business's rules, which your key skips.
+- **If a client books package sessions with explicit `sessions`, handle the three new refusals,** or book from a planned slate instead.
+- **Show only the actions `viewerActions` allows,** and ask the cancel quote before you cancel.
+
+Full detail: [Let clients manage their own bookings](/guides/client-self-service), [Book and pay with a quote](/guides/book-with-a-quote), [Book for a family member](/guides/book-for-a-family-member), [Participant settings](/concepts/booking-engine-model#participant-settings), [Book a client's package credit → Explicit sessions are checked like a quote](/guides/book-a-package-credit#explicit-sessions-are-checked-like-a-quote).
+
+</Update>
+
 <Update label="November 18, 2026" tags={["Docs"]}>
 
 ## These docs now describe the production API

@@ -1,0 +1,364 @@
+---
+title: Book and pay with a quote
+description: On the client plane, hold a time and show the client its exact price, then confirm it to book, paying later, by saved card or by a payment link. Quote and buy a package the same way.
+---
+
+A **quote** lets a signed-in client book in two steps, with no order or hold
+calls from your server:
+
+1. **Quote.** MarketBox holds the time for the client for 10 minutes and
+   states exactly what it costs and how it is paid.
+2. **Confirm.** Once the client agrees, MarketBox books exactly what the quote
+   states, and takes the payment if there is one.
+
+Both calls run on the client plane: your API key and the client's access
+token. The client is the one in the token, so your server never sends a
+`clientId`.
+
+This guide assumes hosted sign-in and the
+[BFF pattern](/guides/booking-flow-auth#the-bff-pattern) are working, and that
+the client is onboarded with `POST /clients/me`. For the API-key flow, where
+your server creates the order and the booking itself, see
+[Client checkout end to end](/guides/client-checkout-end-to-end).
+
+## The routes at a glance
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `POST` | `/clients/me/booking-quotes` | Hold a time for the client and price it. |
+| `POST` | `/clients/me/package-quotes` | Price a package for the client. Holds nothing. |
+| `GET` | `/clients/me/quotes/{quoteId}` | The quote as it stands now. |
+| `POST` | `/clients/me/quotes/{quoteId}/confirm` | Book or buy what the quote states. |
+| `DELETE` | `/clients/me/quotes/{quoteId}` | Let the held time go. |
+| `GET` | `/clients/me/payment-methods` | The cards the client saved with this business. |
+
+Each path is relative to the project: `POST /clients/me/booking-quotes` is
+`POST /v1/projects/{projectId}/clients/me/booking-quotes`. A quote id starts
+with `qte_`.
+
+## Quote a booking
+
+Take the service, offering, supplier and start from the availability search.
+See [Search suppliers by availability](/guides/search-suppliers-by-availability).
+
+```json
+// POST /v1/projects/{projectId}/clients/me/booking-quotes
+{
+  "serviceId": "srv_01kv6r83j9fmquwl81xkm5bwj6",
+  "offeringId": "off_01kv6r83j9fmquwl81xkm5bwj6",
+  "supplierId": "sup_01kv6r83j9fmquwl81xkm5bwj6",
+  "startTime": "2026-12-09T19:00:00.000Z",
+  "place": { "locationType": "VIRTUAL" }
+}
+```
+
+The end follows from the offering's length. `place` says where the session
+happens:
+
+| `place.locationType` | Also send | Where |
+| --- | --- | --- |
+| `PHYSICAL` | `locationId` | At one of the business's Locations. |
+| `VIRTUAL` | nothing | Online. |
+| `TRAVEL_ZONE` | `addressId` | At one of the client's own saved addresses, from `GET /clients/me`. The supplier travels there. |
+
+The answer is `201` with the held, priced quote. Abridged:
+
+```json
+{
+  "data": {
+    "quoteId": "qte_01kx3m7c2d8fh4j6k9n1p5r0s2",
+    "kind": "BOOKING",
+    "status": "OPEN",
+    "expiresAt": "2026-12-01T15:10:00.000Z",
+    "bookingTz": "America/Toronto",
+    "localDate": "2026-12-09",
+    "localStartTime": "14:00:00",
+    "localEndTime": "15:00:00",
+    "lines": [
+      {
+        "label": "Private swim lesson, 60 min",
+        "quantity": 1,
+        "unitPrice": { "amount": 4500, "currency": "CAD" },
+        "lineTotal": { "amount": 4500, "currency": "CAD" }
+      }
+    ],
+    "subtotal": { "amount": 4500, "currency": "CAD" },
+    "feeTotal": { "amount": 300, "currency": "CAD" },
+    "tax": { "amount": 624, "currency": "CAD" },
+    "total": { "amount": 5424, "currency": "CAD" },
+    "paymentStep": "AFTER_SERVICE",
+    "paymentChoices": ["LATER"]
+  }
+}
+```
+
+Read `total` and `paymentStep` back to the client before you confirm. Show the
+time in `bookingTz`. Amounts are in minor units: `5424` is $54.24.
+
+### What a quote checks
+
+| Situation | Status and `code` |
+| --- | --- |
+| The time doesn't fit the supplier's schedule for this service, is booked or blocked, or is outside their travel area. | `409 SLOT_UNAVAILABLE` |
+| The start is closer than the business's minimum booking notice. | `422 INSIDE_BOOKING_NOTICE` |
+| The service isn't on sale as a single booking. | `422 NOT_SELLABLE` or `422 SERVICE_NOT_SOLD_AS` |
+| The client already holds 3 open quotes. | `409 TOO_MANY_OPEN_QUOTES` |
+| A `TRAVEL_ZONE` address has no map position. | `422 ADDRESS_NOT_LOCATED` |
+| A `payWith` the business doesn't offer. | `422 PAYMENT_OPTION_UNAVAILABLE` |
+| The supplier's calendar is busy with other writes. | `409 OCCUPANCY_CONTENTION`. Retry. |
+
+A fourth quote, for example, is refused:
+
+```json
+{
+  "code": "TOO_MANY_OPEN_QUOTES",
+  "message": "You already hold 3 times. Confirm or let one go first.",
+  "statusCode": 409,
+  "requestId": "4b7e2c9a-1d3f-4e58-b6a0-8c2d5f9e1a37"
+}
+```
+
+## How the booking is paid
+
+`paymentStep` on the quote says how the booking is paid:
+
+| `paymentStep` | What happens at confirm |
+| --- | --- |
+| `NONE` | Nothing to pay. The booking is made. |
+| `AFTER_SERVICE` | The client pays the business later. Nothing is charged; the booking is made. |
+| `SAVED_CARD` | A saved card is charged, then the booking is made. |
+| `LINK` | Nothing is booked yet. The client pays on a payment page first. |
+
+When the business offers both ways, `paymentChoices` lists `LATER` and `NOW`.
+Send `payWith` on the quote to pick one. With one entry there is no choice,
+and the business's default applies.
+
+### Pay with a saved card
+
+`GET /clients/me/payment-methods` lists the cards the client saved when they
+paid this business before:
+
+```json
+{
+  "data": [
+    { "cardRef": "crd_cG1fMVFhQmNEZWZHaGlKa0xt", "brand": "visa", "last4": "4242", "expMonth": 8, "expYear": 2028 }
+  ]
+}
+```
+
+The list is empty when the business doesn't take card payments, or the client
+has saved no card here. `cardRef` is an opaque reference, not a Stripe id.
+
+Pass it on the quote. It implies `payWith: "NOW"`, and works only where the
+business takes payment when booking:
+
+```json
+// POST /v1/projects/{projectId}/clients/me/booking-quotes
+{
+  "serviceId": "srv_01kv6r83j9fmquwl81xkm5bwj6",
+  "offeringId": "off_01kv6r83j9fmquwl81xkm5bwj6",
+  "supplierId": "sup_01kv6r83j9fmquwl81xkm5bwj6",
+  "startTime": "2026-12-09T19:00:00.000Z",
+  "place": { "locationType": "VIRTUAL" },
+  "cardRef": "crd_cG1fMVFhQmNEZWZHaGlKa0xt"
+}
+```
+
+The quote comes back with `paymentStep: "SAVED_CARD"` and `card`, the brand and
+last four digits. Read them back to the client. The card is charged only at
+confirm. A card that isn't the client's, or can't be used here, is
+`409 CARD_NOT_AVAILABLE`.
+
+## Confirm the quote
+
+Once the client agrees, confirm:
+
+```bash
+curl -X POST "$MARKETBOX_API_URL/v1/projects/$MARKETBOX_PROJECT_ID/clients/me/quotes/${quoteId}/confirm" \
+  -H "x-api-key: $MARKETBOX_API_KEY" \
+  -H "Authorization: Bearer <accessToken>"
+```
+
+| Status | Meaning |
+| --- | --- |
+| `201` | Booked. `data.bookings` holds the booking, and `data.quote.status` is `CONFIRMED`. The client and the supplier are emailed. |
+| `200` | Already booked: this was a repeated confirm. The same booking comes back. |
+| `202` | `LINK` only. The time is held while the client pays. See [Pay by link](#pay-by-link). |
+
+**Confirm is safe to repeat.** A confirmed quote answers with its booking
+again, and a repeated confirm never charges the card twice.
+
+**The price is checked again first.** If it changed, nothing is booked and the
+answer carries the new quote. Show the new price to the client, and confirm
+again only if they agree:
+
+```json
+{
+  "code": "QUOTE_CHANGED",
+  "message": "The price changed since the quote. Show the new price to the client.",
+  "statusCode": 409,
+  "quote": { "quoteId": "qte_01kx3m7c2d8fh4j6k9n1p5r0s2", "status": "OPEN", "total": { "amount": 5800, "currency": "CAD" } },
+  "requestId": "9d2a6f1c-3e8b-4c75-a0d4-2b7e1f5c8a93"
+}
+```
+
+A quote past `expiresAt` is gone:
+
+```json
+{
+  "code": "QUOTE_EXPIRED",
+  "message": "This quote has expired. Ask for a new one.",
+  "statusCode": 410,
+  "requestId": "1f8c3a7e-5b2d-4d96-8e04-6a9c2b5f3d18"
+}
+```
+
+Other refusals at confirm: `409 QUOTE_CANCELLED` (it was let go),
+`409 QUOTE_IN_PROGRESS` (another confirm is running) and `409 SLOT_UNAVAILABLE`
+(the time was taken).
+
+### Saved-card failures
+
+With `SAVED_CARD`, the card is charged first. The booking is made only once the
+charge succeeds.
+
+| `code` | Status | What happened | What to do |
+| --- | --- | --- | --- |
+| `CARD_DECLINED` | 422 | The card was declined. Nothing was booked, and the quote was let go. | Ask for a new quote with another card. |
+| `CARD_NEEDS_CONFIRMATION` | 409 | The client's bank must confirm the payment. Nothing was booked, and the quote was let go. | Ask for a new quote with another card, or pay by link. |
+| `CARD_NOT_AVAILABLE` | 409 | The card can no longer be used. Nothing was booked, and the quote was let go. | Ask for a new quote with another card. |
+| `CARD_PAYMENT_REFUSED` | 409 | The payment was refused outright. Nothing was charged or booked, and the quote was let go. | Ask for a new quote with another card. |
+| `CHARGE_OUTCOME_UNKNOWN` | 503 | The card network gave no clear answer, so the card may have been charged. | Confirm again after `Retry-After`. It won't charge twice. |
+| `CHARGED_NOT_BOOKED` | 409 | The card was, or may have been, charged, and the time couldn't be booked. MarketBox has told the business. | **Don't pay again and don't ask for a new quote.** Follow the `message`. |
+
+`CHARGED_NOT_BOOKED` comes in a few forms, and the `message` says which. For
+example:
+
+```json
+{
+  "code": "CHARGED_NOT_BOOKED",
+  "message": "The card may have been charged, and this time cannot be booked. Do not ask for a new quote: the business has been told and will refund the card if it was charged.",
+  "statusCode": 409,
+  "requestId": "e7b1c4d9-2a6f-4e83-9c05-3d8a1f6b2e74"
+}
+```
+
+Once a charge was attempted, every later confirm goes to that same charge. The
+price and the card aren't checked again, and the quote never expires or is let
+go.
+
+### Pay by link
+
+With `LINK`, the first confirm creates the order and opens its card payment.
+It answers `202` and holds the time for 15 minutes, until `payment.payBy`:
+
+```json
+{
+  "data": {
+    "quote": { "quoteId": "qte_01kx3m7c2d8fh4j6k9n1p5r0s2", "status": "AWAITING_PAYMENT", "payBy": "2026-12-01T15:15:00.000Z" },
+    "bookings": [],
+    "payment": {
+      "orderId": "ord_01kx3m7d9e2fg5h7j0k3m6n8p1",
+      "paymentIntentId": "pi_3Q0example",
+      "clientSecret": "pi_3Q0example_secret_example",
+      "stripeAccountId": "acct_1Example",
+      "amount": { "amount": 5424, "currency": "CAD" },
+      "payBy": "2026-12-01T15:15:00.000Z"
+    }
+  }
+}
+```
+
+Take the payment with Stripe.js on your payment page, with `clientSecret` and
+`stripeAccountId` as the `stripeAccount` option. See
+[Accept payments with Stripe](/guides/accept-payments-with-stripe). Never show
+`clientSecret` to the client, and never pass it to an assistant.
+
+The quote becomes `CONFIRMED` when Stripe reports the payment, and the booking
+is made then. Read `GET /clients/me/quotes/{quoteId}` to follow it. If the time
+was taken before a late payment arrived, the quote ends `NOT_BOOKED` and the
+business is told to refund it.
+
+Confirming again returns the same payment. After `payBy` it is
+`410 QUOTE_EXPIRED`. A business that isn't set up for card payments is
+`409 ONLINE_PAYMENT_NOT_AVAILABLE`.
+
+## Let a quote go
+
+`DELETE /clients/me/quotes/{quoteId}` releases the held time so others can book
+it. It's safe to repeat. It is refused when:
+
+- the quote is already booked: `409 QUOTE_ALREADY_CONFIRMED`. Cancel the booking
+  instead. See [Let clients manage their own bookings](/guides/client-self-service#cancel-a-booking).
+- a confirm is running: `409 QUOTE_IN_PROGRESS`;
+- it's waiting for its payment by link: `409 QUOTE_AWAITING_PAYMENT`. It keeps
+  its time until `payBy`.
+
+## The quote's statuses
+
+| `status` | Meaning |
+| --- | --- |
+| `OPEN` | The time is held, and the quote can be confirmed until `expiresAt`. |
+| `CONFIRMING` | A confirm is in progress. |
+| `AWAITING_PAYMENT` | A `LINK` quote is waiting for its payment, until `payBy`. |
+| `CONFIRMED` | Booked. See `bookingIds` and `orderId`. |
+| `NOT_BOOKED` | Paid, but the time was taken before the payment arrived. The business is told to refund. |
+| `CANCELLED` | Let go by the client. |
+| `EXPIRED` | The hold ran out before a confirm. An `OPEN` quote past `expiresAt` reads as `EXPIRED`. |
+
+## Buy a package
+
+`POST /clients/me/package-quotes` prices a package. It holds no time:
+
+```json
+// POST /v1/projects/{projectId}/clients/me/package-quotes
+{
+  "packageId": "pkg_01kv6r83j9fmquwl81xkm5bwj6",
+  "payWith": "NOW"
+}
+```
+
+The quote has `kind: "PACKAGE"`, the package's `name`, its `credits` (how many
+sessions) and `validityDays` (`null` when they don't expire), with the same
+money fields and `paymentStep`. `cardRef` works as for a booking. Confirm it
+with `POST /clients/me/quotes/{quoteId}/confirm` within 10 minutes.
+
+The client books the sessions from `GET /clients/me/credits` once the package
+is paid, and not before. Tell the client when that is:
+
+- **Saved card:** at once.
+- **Payment link:** when the payment arrives.
+- **Paid later:** only once the business records the payment.
+
+See [Book a client's package credit](/guides/book-a-package-credit).
+
+A package that isn't on sale is `422 PACKAGE_NOT_ACTIVE`, `NOT_SELLABLE` or
+`SERVICE_NOT_SOLD_AS`. More than 10 package quotes for one client in a day
+(UTC) is `429 PACKAGE_QUOTE_LIMIT`.
+
+## Reference
+
+### Endpoints used in this guide
+
+| Endpoint | Method | Auth | Description |
+| --- | --- | --- | --- |
+| `/v1/projects/{projectId}/clients/me/booking-quotes` | `POST` | `x-api-key` + `Bearer` | Hold a time for 10 minutes and price it. |
+| `/v1/projects/{projectId}/clients/me/package-quotes` | `POST` | `x-api-key` + `Bearer` | Price a package. |
+| `/v1/projects/{projectId}/clients/me/quotes/{quoteId}` | `GET` | `x-api-key` + `Bearer` | The quote now. |
+| `/v1/projects/{projectId}/clients/me/quotes/{quoteId}/confirm` | `POST` | `x-api-key` + `Bearer` | Book or buy it. Safe to repeat. |
+| `/v1/projects/{projectId}/clients/me/quotes/{quoteId}` | `DELETE` | `x-api-key` + `Bearer` | Let the time go. |
+| `/v1/projects/{projectId}/clients/me/payment-methods` | `GET` | `x-api-key` + `Bearer` | The client's saved cards with this business. |
+| `/v1/projects/{projectId}/clients/me/credits` | `GET` | `x-api-key` + `Bearer` | The package sessions a paid package gives. |
+
+### Errors and edge cases
+
+| Scenario | `code` | Status | Resolution |
+| --- | --- | --- | --- |
+| Another client's quote, or one that doesn't exist | — | `404` | Show "not found". |
+| A family member is booked who isn't the client's | `ATTENDEE_NOT_ALLOWED` | `422` | Pass a `clientId` from `GET /clients/me/dependants`. See [Book for a family member](/guides/book-for-a-family-member). |
+| A signed-in family member aged 16 or 17 asks to pay now or by card | `GUARDIAN_PAYS` | `422` | Quote again with `payWith: "LATER"`. Their guardian pays. |
+| A signed-in family member, where the business takes payment when booking | `GUARDIAN_MUST_BOOK` | `422` | Their guardian books it. |
+| A signed-in family member under 16 | `DEPENDANT_TOO_YOUNG` | `409` | Their guardian books it. |
+| A payment is already in progress for the quote | `PAYMENT_IN_FLIGHT` | `409` | Wait, then read the quote again. |
+
+See [Errors](/concepts/errors) for the envelope.

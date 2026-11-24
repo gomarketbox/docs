@@ -114,6 +114,9 @@ already moved that needs a person to look at it. Its `target` is
 | `PAID_ON_CANCELLED_ORDER` | A card payment succeeded after its order was cancelled. Refunding it is the business's decision. |
 | `ORDER_OVERPAID` | Settlement left `amountPaid` above the order's total. |
 | `REFUND_FAILED` | Stripe failed a card refund after reporting it succeeded, so the client didn't get the money back. |
+| `CLIENT_CANCELLED_PAID_BOOKING` | A client cancelled their own booking that was paid by card. Nothing is refunded automatically; refunding it is the business's decision. |
+| `CHARGED_WITHOUT_BOOKING` | A client paid by card for a booking quote, and the booking couldn't be made. If no booking follows, the money is to be refunded. |
+| `CHARGE_UNCONFIRMED` | A saved-card charge for a client's quote got no clear answer from Stripe. The card may have been charged, and nothing is booked yet. |
 
 A supplier portal never receives this alert. If you validate responses
 against strict enums generated from the reference, they now include these

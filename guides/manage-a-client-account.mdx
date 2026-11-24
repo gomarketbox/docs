@@ -1,6 +1,6 @@
 ---
 title: Manage a client's account
-description: Let a signed-in client edit their profile and saved addresses, choose the default address that prices their orders, and see their booking and order history.
+description: Let a signed-in client read and edit their profile and saved addresses, choose the default address that prices their orders, and see their own booking and order history on the client plane.
 ---
 
 A client account page in your booking flow does three jobs:
@@ -9,11 +9,9 @@ A client account page in your booking flow does three jobs:
 - manages their saved service addresses, and which one is the default;
 - lists their bookings and orders.
 
-The first two run on the **client plane**: your BFF sends your API key and the
+All three run on the **client plane**: your BFF sends your API key and the
 signed-in client's token, and MarketBox works out which client it is from the
-token. History is different. The routes that list a client's bookings and
-orders take a `clientId` in the path and need only the API key, so **your
-server must make sure the signed-in client only ever sees their own**.
+token. The client only ever sees their own profile, bookings and orders.
 
 This guide assumes you have hosted sign-in and the
 [BFF pattern](/guides/booking-flow-auth#the-bff-pattern) working, and that you
@@ -27,6 +25,7 @@ client profile and every client route on one page, see
 | Method | Path | What it does |
 | --- | --- | --- |
 | `POST` | `/clients/me` | Onboard the signed-in client, or return their profile. Idempotent. |
+| `GET` | `/clients/me` | Read the profile. Writes nothing. |
 | `PATCH` | `/clients/me` | Change `firstName`, `lastName` or `phone`. |
 | `POST` | `/clients/me/addresses` | Save an address. |
 | `PATCH` | `/clients/me/addresses/{addressId}` | Change a saved address. |
@@ -35,9 +34,12 @@ client profile and every client route on one page, see
 
 Each path above is relative to the project: `POST /clients/me` is
 `POST /v1/projects/{projectId}/clients/me`. Every one takes both credentials: `x-api-key` from your server, and `Authorization: Bearer` with
-the client's access token. There is no `GET /clients/me`. Read the profile by
-calling `POST /clients/me` again: it's idempotent, writes nothing when you
-send no body, and returns `200` with the profile.
+the client's access token.
+
+Read the profile with `GET /clients/me`. It returns the client's own fields
+and saved addresses, but not `lastPayment`. `POST /clients/me` is idempotent
+too: with no body it writes nothing and returns `200` with the profile,
+including `lastPayment`.
 
 Every route except `POST /clients/me` needs the client to be onboarded first.
 Before that, the person has no membership of the project, and each returns
@@ -285,87 +287,72 @@ coordinates, not postal codes.
 
 ## Show booking and order history
 
-There is no client-plane route for history. Use the API-key routes, with the
-`clientId` your server resolved from the client's token:
+The client plane lists the signed-in client's own history:
 
 | Method | Path | Returns |
 | --- | --- | --- |
-| `GET` | `/clients/{clientId}/bookings` | The client's bookings, past and upcoming, by date. Filter with `startDate`, `endDate` (UTC) and `status`. |
-| `GET` | `/clients/{clientId}/orders` | The client's orders, newest first, in every status. |
-| `GET` | `/bookings/{bookingId}/aggregate` | One booking with its service lines, attendance reports and the names of both parties. |
-| `GET` | `/orders/{orderId}/aggregate` | One order with its items. |
+| `GET` | `/clients/me/bookings` | The client's bookings in a window. Filter with `startDate`, `endDate` (UTC) and `status`. Each row carries `viewerActions`. |
+| `GET` | `/clients/me/bookings/{bookingId}` | One booking, with its service lines and participants. |
+| `GET` | `/clients/me/orders` | The client's orders, newest first, in every status. Paginated with `limit` and `cursor`. |
+| `GET` | `/clients/me/orders/{orderId}` | One order, with its lines and what is still due. |
 
-The two lists are paginated with `limit` and `cursor`. See
-[Pagination](/concepts/pagination). The two aggregates return one record.
-
-<Warning>
-**These routes don't know who is signed in.** They return whatever `clientId`,
-`bookingId` or `orderId` you ask for in the project. A BFF that takes the
-`clientId` from the browser, or that fetches a booking by an id from the URL
-without checking it, shows one client another client's bookings, names and
-addresses.
-
-Always resolve the `clientId` from the token with `POST /clients/me`. For a
-single booking or order, compare its `clientId` with that one, and answer
-`404` when they differ.
-</Warning>
-
-```ts
-// app/api/bff/me/bookings/[bookingId]/route.ts
-import { NextResponse } from 'next/server';
-import { signedInClientId } from '@/lib/client'; // see Create a single booking
-
-export async function GET(
-  request: Request,
-  ctx: { params: Promise<{ bookingId: string }> },
-) {
-  const clientId = await signedInClientId(request); // from the token, never the browser
-  const { bookingId } = await ctx.params;
-
-  const res = await fetch(
-    `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/bookings/${bookingId}/aggregate`,
-    { headers: { 'x-api-key': process.env.MARKETBOX_API_KEY! } }, // server-only
-  );
-  const body = await res.json().catch(() => ({}));
-
-  // Same answer for "not yours" and "doesn't exist", so ids can't be probed.
-  if (!res.ok || body.data?.booking?.clientId !== clientId) {
-    return NextResponse.json({ message: 'Booking not found' }, { status: 404 });
-  }
-  return NextResponse.json(body, { status: 200 });
-}
-```
-
-`signedInClientId` is the helper from
-[Create a single booking](/guides/create-a-single-booking). It
-calls `POST /clients/me` with the client's token and returns `data.clientId`.
-
-For the list, put the resolved `clientId` in the path yourself:
+A booking or order that isn't the client's answers `404`, the same as one
+that doesn't exist. Your BFF forwards the token and needs no `clientId`:
 
 ```ts
 // app/api/bff/me/bookings/route.ts
-const clientId = await signedInClientId(request);
-const url = new URL(
-  `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/clients/${clientId}/bookings`,
-);
-url.searchParams.set('startDate', new Date().toISOString()); // upcoming only
-url.searchParams.set('limit', '20');
+import { NextResponse } from 'next/server';
+
+export async function GET(request: Request) {
+  const authorization = request.headers.get('authorization'); // the client's Bearer token
+  if (!authorization?.toLowerCase().startsWith('bearer ')) {
+    return NextResponse.json({ message: 'Missing bearer token' }, { status: 401 });
+  }
+
+  const url = new URL(
+    `${process.env.MARKETBOX_API_URL}/v1/projects/${process.env.MARKETBOX_PROJECT_ID}/clients/me/bookings`,
+  );
+  const now = new Date();
+  url.searchParams.set('startDate', now.toISOString()); // upcoming only
+  url.searchParams.set('endDate', new Date(now.getTime() + 60 * 86_400_000).toISOString());
+  url.searchParams.set('expand', 'services,location');
+
+  const res = await fetch(url, {
+    headers: { 'x-api-key': process.env.MARKETBOX_API_KEY!, authorization }, // key is server-only
+  });
+  const body = await res.json().catch(() => ({}));
+  return NextResponse.json(body, { status: res.status });
+}
 ```
+
+The bookings list isn't paginated: it returns the whole window, so keep it
+short. With any `expand` value except `client`, the window is required and at
+most 93 days.
 
 <Tip>
 For an "upcoming" tab, ask for `SCHEDULED` bookings from now on. For a "past"
-tab, ask for an `endDate` of now and show every status, including
+tab, ask for a window ending now and show every status, including
 `AWAITING_CONFIRMATION`: that is a session that has ended and not been
 settled yet. See [The booking lifecycle](/resources/bookings#the-booking-lifecycle).
 </Tip>
 
-A client can't cancel or move a booking from the client plane. If your page
-offers that, your server does it with the API key, after the same ownership
-check. See [Cancel or reschedule a booking](/guides/cancel-or-reschedule-a-booking).
+To let the client move, cancel or rate a booking from this page, use the
+client-plane routes for those too. See
+[Let clients manage their own bookings](/guides/client-self-service).
 
-To let the client rate a past booking from this page, use the same ownership
-check, then post a review. See
-[Collect reviews and show ratings](/guides/collect-reviews-and-show-ratings).
+### From your server with the API key
+
+The API-key routes `GET /clients/{clientId}/bookings`,
+`GET /clients/{clientId}/orders`, `GET /bookings/{bookingId}/aggregate` and
+`GET /orders/{orderId}/aggregate` still work for back-office views.
+
+<Warning>
+**The API-key routes don't know who is signed in.** They return whatever
+`clientId`, `bookingId` or `orderId` you ask for in the project. Never use
+them to answer a signed-in client with an id from the browser. If you must,
+resolve the `clientId` from the token with `POST /clients/me`, compare each
+record's `clientId` with it, and answer `404` when they differ.
+</Warning>
 
 ## Reference
 
@@ -379,9 +366,9 @@ check, then post a review. See
 | `/v1/projects/{projectId}/clients/me/addresses/{addressId}` | `PATCH` | `x-api-key` + `Bearer` | Change an address. The id may change. |
 | `/v1/projects/{projectId}/clients/me/addresses/{addressId}` | `DELETE` | `x-api-key` + `Bearer` | Remove an address. Permanent. |
 | `/v1/projects/{projectId}/clients/me/addresses/{addressId}/default` | `PUT` | `x-api-key` + `Bearer` | Make an address the default. |
-| `/v1/projects/{projectId}/clients/{clientId}/bookings` | `GET` | `x-api-key` | The client's bookings. Your server checks ownership. |
-| `/v1/projects/{projectId}/clients/{clientId}/orders` | `GET` | `x-api-key` | The client's orders. Your server checks ownership. |
-| `/v1/projects/{projectId}/bookings/{bookingId}/aggregate` | `GET` | `x-api-key` | One booking in full. Check `booking.clientId`. |
+| `/v1/projects/{projectId}/clients/me` | `GET` | `x-api-key` + `Bearer` | Read the profile, without `lastPayment`. |
+| `/v1/projects/{projectId}/clients/me/bookings` | `GET` | `x-api-key` + `Bearer` | The client's bookings in a window. |
+| `/v1/projects/{projectId}/clients/me/orders` | `GET` | `x-api-key` + `Bearer` | The client's orders. |
 
 ### Errors and edge cases
 

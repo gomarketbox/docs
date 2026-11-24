@@ -510,6 +510,36 @@ and `orderItemId`. A slate planned from a `packageId`, or from another credit,
 is a `404` with the same body as an unknown id. Plan again from the credit
 (Step 3). Explicit `sessions` need no slate.
 
+### Explicit sessions are checked like a quote
+
+Each session you send in `sessions` is checked the way a
+[booking quote](/guides/book-with-a-quote#what-a-quote-checks) is, before
+anything is booked:
+
+- It starts at least the business's minimum booking notice from now, or it is
+  `422 INSIDE_BOOKING_NOTICE`.
+- It lasts exactly the offering's length, or it is
+  `422 SESSION_LENGTH_NOT_OFFERED`.
+- It fits the supplier's schedule for this service, outside their booked and
+  blocked time and inside their travel area, or it is `409 SLOT_UNAVAILABLE`.
+
+```json
+{
+  "code": "SESSION_LENGTH_NOT_OFFERED",
+  "message": "A session of this service lasts 60 minutes.",
+  "statusCode": 422,
+  "requestId": "2d7f4a1c-8b3e-4e95-a6c0-5f1b9d3e7a28"
+}
+```
+
+Sessions from a planned slate already meet these rules.
+
+### Book for a family member
+
+Send `attendeeClientId` with one of the client's family members' `clientId`.
+The client's credits are used, and the family member attends. See
+[Book for a family member](/guides/book-for-a-family-member).
+
 ### When a slot goes stale
 
 If a session's time was taken between planning and booking, the call returns
@@ -558,6 +588,10 @@ planned from the same credit, so the client can pick one and you book its
 | Booking another client's order | `NOT_FOUND` | `404` | Book only credits from `GET /clients/me/credits`. |
 | Booking a credit the list would not show (unpaid, used up, expired, removed) | `CREDIT_NOT_BOOKABLE` | `409` | Re-read the credits and offer only those listed. |
 | Booking a `slateId` planned from a `packageId` or another credit | `NOT_FOUND` | `404` | Plan the slate from this credit (Step 3). |
+| An explicit session closer than the business's booking notice | `INSIDE_BOOKING_NOTICE` | `422` | Pick a later start. |
+| An explicit session that isn't the offering's length | `SESSION_LENGTH_NOT_OFFERED` | `422` | Send the offering's own length, or book from a slate. |
+| An explicit session that doesn't fit the supplier | `SLOT_UNAVAILABLE` | `409` | Plan a slate from the credit (Step 3), or pick another time. |
+| `attendeeClientId` isn't one of the client's family members | `ATTENDEE_NOT_ALLOWED` | `422` | Pass a `clientId` from `GET /clients/me/dependants`. |
 | A session's offering is no longer `ACTIVE` | `NOT_SELLABLE` | `422` | "Offering off_… is INACTIVE and is not sold; only ACTIVE offerings take new bookings and orders". A credit already bought stays bookable when its service stops being `LIVE`, but not when its offering is deactivated. The business reactivates the offering. Don't retry. |
 | A slot was taken between planning and booking | `SLOT_NO_LONGER_BOOKABLE` | `409` | Offer `freshSuggestions`, then book with a new `idempotencyKey`. |
 | Same `idempotencyKey`, different body | `IDEMPOTENCY_KEY_CONFLICT` | `409` | Use a new key for each distinct attempt. The same key and body replays the first `201`. |

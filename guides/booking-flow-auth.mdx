@@ -410,6 +410,13 @@ They are per-environment, not per-application.
 | `/v1/projects/{projectId}/availability/package-slate` | `POST` | `x-api-key` | Plan the sessions left on a credit (`orderId` + `orderItemId`). |
 | `/v1/projects/{projectId}/clients/me/orders/{orderId}/package-bookings` | `POST` | `x-api-key` + `Bearer` | Book sessions from the signed-in client's own credit. |
 
+The client plane does more than this guide shows. A signed-in client can also
+book and pay with a quote, see and change their own bookings and orders, and
+book for their family. See
+[Book and pay with a quote](/guides/book-with-a-quote),
+[Let clients manage their own bookings](/guides/client-self-service) and
+[Book for a family member](/guides/book-for-a-family-member).
+
 ### Error and status cases
 
 | Scenario | HTTP status | Resolution |

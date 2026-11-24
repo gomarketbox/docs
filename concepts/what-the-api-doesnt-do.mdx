@@ -1,6 +1,6 @@
 ---
 title: What the API doesn't do
-description: The features the public API doesn't have — webhooks, refunds, payouts, invitations, creating Locations and skills, and some supplier-plane and client-plane actions — and what to do instead of each.
+description: The features the public API doesn't have — webhooks, refunds, payouts, invitations, creating Locations and skills, and some supplier-plane actions — and what to do instead of each.
 ---
 
 This page lists what the public API can't do today. Each entry says what to
@@ -23,7 +23,6 @@ appear.
 | Write a supplier's hours, blocked time or travel zones with the API key | The supplier does it through your portal, on the supplier plane. |
 | Let a supplier create a booking, read booking notes or connect Google Calendar | Your server books with the key. Notes and Google Calendar stay in the dashboard. |
 | Let a supplier change their own `email`, `maxTravelTime` or `defaultLocale` | The business changes them, with `PUT /suppliers/{supplierId}` or in the dashboard. |
-| Let a client cancel or reschedule on the client plane | Your server does it with the key, after checking the booking is the client's. |
 
 ## No webhooks or push notifications
 
@@ -158,23 +157,3 @@ The refusal comes back as a `403`:
 `PUT /suppliers/{supplierId}` and the API key, or the business uses the
 dashboard. Leave these fields out of the supplier's own form. See
 [Supplier portal: profile and photo](/guides/supplier-portal-profile-and-photo#edit-the-profile).
-
-## A client can't cancel or reschedule on the client plane
-
-The client plane, `/clients/me/...`, has no route to cancel or move a booking.
-
-**Instead, your server does it with the API key:**
-
-1. Resolve the client from their token with `POST /clients/me`, and keep the
-   `clientId` it returns.
-2. Read the booking with `GET /bookings/{bookingId}`.
-3. Refuse when the booking's `clientId` isn't that client's.
-4. Cancel with `POST /bookings/{bookingId}/status`, or move it with
-   `PATCH /bookings/{bookingId}`.
-
-Step 3 matters. The key acts for the business, so the API doesn't check that
-the booking belongs to the person asking. It also skips the service's notice
-window and "clients may not cancel" settings. Apply the business's rules
-yourself before you call. See
-[Cancel or reschedule a booking](/guides/cancel-or-reschedule-a-booking) and
-[Show booking and order history](/guides/manage-a-client-account#show-booking-and-order-history).

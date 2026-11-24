@@ -497,10 +497,14 @@ or chargeable.
 </Warning>
 
 <Note>
-There is no public endpoint to charge a saved card. Every payment in a custom
-booking flow goes through the Payment Element (Steps 2–3) — which is what keeps
-you at SAQ-A. `lastPayment` tells you what the client *used* last; it does not
-let you re-use it.
+In this flow, every payment goes through the Payment Element (Steps 2–3) —
+which is what keeps you at SAQ-A. `lastPayment` tells you what the client
+*used* last; it does not let you re-use it.
+
+To charge a saved card, the client books with a quote on the client plane: list
+their cards with `GET /clients/me/payment-methods`, and pass a `cardRef` on the
+quote. MarketBox charges the card when the client confirms. See
+[Pay with a saved card](/guides/book-with-a-quote#pay-with-a-saved-card).
 </Note>
 
 ## Reference
